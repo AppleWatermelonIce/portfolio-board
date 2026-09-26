@@ -2,19 +2,20 @@
 """
 指数估值抓取 —— 供看板画 PE/PB 分位色带
 
-【通道策略：蛋卷优先，妙想只补 A500】
-  ★ 蛋卷 danjuanfunds（默认，免 key）：沪深300 / 标普500 / 纳指100，约 515 点（周频，10 年）
-  ★ 东财妙想 mx-data（仅中证A500 需要，因为蛋卷不收录 000510）：需 MX_APIKEY
-     无 key 时 A500 沿用本地已有 JSON（页面照常显示，但不再更新）
+【通道策略：三个通道，默认全免 key】
+  ★ 蛋卷 danjuanfunds（免 key）：沪深300 / 标普500 / 纳指100，约 515 点（周频，10 年）
+  ★ 中证官网 + 自算 ROE（免 key）：中证A500，见 scripts/calc_a500.py
+      - PE 用中证 index-perf 接口的 peg 字段（= 官方 PE-TTM，已逐日比对蛋卷验证）
+      - PB 用恒等式 PB = PE × ROE，ROE = Σ净利润(TTM)/Σ净资产 由东财 F10 财务自算
+      - 覆盖 2024-09 指数发布至今（官网更早年份该字段为空）
+  ★ 东财妙想 mx-data（需 MX_APIKEY）：**已非必需**，仅在 --mx 时用作对照
 
 这样设计的目的：**部署到服务器后整条链路不依赖任何 key**。
-服务器只需同步已生成的 assets/valuation.js；若要服务器定时重抓，
-3 个指数走蛋卷完全可行，只有 A500 会因缺 key 而保持旧数据。
 
 用法：
-  python fetch_valuation.py            # 蛋卷抓 3 个 + 有 key 时妙想补 A500（默认）
-  python fetch_valuation.py --no-mx    # 纯免 key：只抓蛋卷 3 个，A500 沿用旧数据
-  python fetch_valuation.py --mx       # 强制全部走妙想（需 key，4 个同源日频）
+  python fetch_valuation.py            # 默认：蛋卷 3 个 + A500 自算（全免 key）
+  python fetch_valuation.py --no-mx    # 同上（保留兼容）
+  python fetch_valuation.py --mx       # 强制全部走妙想（需 key，用于口径对照）
   python fetch_valuation.py SH000300   # 只抓指定
 
 产出 data/valuation/<id>.json：
@@ -37,12 +38,15 @@ MX_TARGETS = {
     "NDX100":   ("纳斯达克100指数 近十年 每个交易日 市盈率PE(TTM) 市净率PB", "纳指100"),
 }
 
-# 蛋卷备选映射
+# 蛋卷通道映射
 DJ_MAPPING = {
     "SH000300": ("SH000300", "沪深300"),
     "SPX":      ("SP500",    "标普500"),
     "NDX100":   ("NDX",      "纳指100"),
 }
+
+# 免 key 自算通道（中证官网 PE + 自算 ROE）
+CALC_TARGETS = {"SH000510": "中证A500"}
 
 
 def num(s):
@@ -130,6 +134,16 @@ def dj_fetch_one(pid, djcode, name):
             "cur": {"pe": last_of(pe), "pb": last_of(pb)}}
 
 
+# ---------------- 免 key 自算通道（中证A500） ----------------
+def calc_fetch_one(pid):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "calc_a500", os.path.join(HERE, "scripts", "calc_a500.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m.build(m.INDEX_CODE, m.ETF, pid, CALC_TARGETS[pid])
+
+
 def existing(pid):
     """已有的本地 JSON（用于 A500 无 key 时沿用）"""
     p = os.path.join(VDIR, pid + ".json")
@@ -145,12 +159,13 @@ def main():
     no_mx = "--no-mx" in sys.argv
     has_key = bool(os.environ.get("MX_APIKEY"))
     want = args or list(MX_TARGETS)
+    # 排序：蛋卷先跑（A500 的水平校准要读蛋卷沪深300 的当前 PE/PB）
+    want = sorted(want, key=lambda p: 0 if p in DJ_MAPPING else 1)
     ok = miss = skip = 0
 
-    print(f"通道：蛋卷优先（免 key）"
-          + ("，妙想可用（MX_APIKEY 已设置）" if has_key else "，妙想不可用（无 MX_APIKEY）")
-          + ("  [--mx 强制妙想]" if force_mx else "")
-          + ("  [--no-mx 纯免 key]" if no_mx else ""))
+    print(f"通道：蛋卷（免 key）+ A500 自算（免 key）"
+          + ("，妙想可用（MX_APIKEY 已设置）" if has_key else "，妙想不可用（无 MX_APIKEY，不影响）")
+          + ("  [--mx 强制妙想]" if force_mx else ""))
     print("-" * 96)
 
     for pid in want:
@@ -159,23 +174,25 @@ def main():
             ch = "mx" if pid in MX_TARGETS else None
         elif pid in DJ_MAPPING:
             ch = "dj"                                  # 蛋卷覆盖的，一律走蛋卷
-        elif pid in MX_TARGETS:
-            ch = "mx" if (has_key and not no_mx) else None
+        elif pid in CALC_TARGETS:
+            ch = "calc"                                # 中证A500：官网 PE + 自算 ROE，免 key
 
         if ch is None:
-            # 蛋卷无收录 + 妙想不可用 → 沿用旧数据
             old = existing(pid)
             if old:
-                print(f"  [沿用] {pid} {old['name']:8s} 无 key 可更新，保留 {old.get('src')} 数据 "
+                print(f"  [沿用] {pid} {old['name']:8s} 无可用通道，保留 {old.get('src')} 数据 "
                       f"截止 {old['d'][-1]}（n={old['n']}）")
             else:
-                print(f"  [SKIP] {pid} 蛋卷不收录且无 MX_APIKEY，页面将不显示其估值底色")
+                print(f"  [SKIP] {pid} 无可用通道，页面将不显示其估值底色")
             skip += 1
             continue
 
         if ch == "dj":
             code, name = DJ_MAPPING[pid]
             fn = lambda: dj_fetch_one(pid, code, name)
+        elif ch == "calc":
+            name = CALC_TARGETS[pid]
+            fn = lambda: calc_fetch_one(pid)
         else:
             q, name = MX_TARGETS[pid]
             fn = lambda: mx_fetch_one(pid, q, name)

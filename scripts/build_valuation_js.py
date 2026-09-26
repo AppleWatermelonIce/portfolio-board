@@ -45,10 +45,12 @@ def band_of(p):
     return BANDS[-1][1], BANDS[-1][2]
 
 
-SRC_CN = {"danjuan": "蛋卷", "miaoxiang": "妙想"}     # 来源中文名（可能混合：蛋卷×3 + 妙想×1）
+SRC_CN = {"danjuan": "蛋卷", "miaoxiang": "妙想", "csindex+roe": "中证+自算"}
 
 def main():
-    files = sorted(glob.glob(os.path.join(VDIR, "*.json")))
+    # 下划线开头的是缓存（_a500_fin.json / _calib_fin.json），不是标的
+    files = sorted(p for p in glob.glob(os.path.join(VDIR, "*.json"))
+                   if not os.path.basename(p).startswith("_"))
     out = {"updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
            "bands": [{"hi": h, "name": n, "color": c} for h, n, c in BANDS],
            "src": "", "srcByItem": {}, "items": {}}

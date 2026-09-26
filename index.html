@@ -414,7 +414,7 @@ function renderValBadge(p){
     ? `实际样本仅 ${pre.spanYears.toFixed(1)} 年（${pre.from} 起，不足 ${pre.win} 年）`
     : `近 ${pre.win} 年样本 ${pre.nWin} 个交易日（${pre.from} ~ ${pre.to}）`;
   const src = (VDATA.srcByItem || {})[p.id] || '';
-  const srcCn = {danjuan:'蛋卷', miaoxiang:'妙想'}[src] || src || '—';
+  const srcCn = {danjuan:'蛋卷', miaoxiang:'妙想', 'csindex+roe':'中证+自算'}[src] || src || '—';
   el.innerHTML = `<span class="vb" style="background:${b.color}"
       title="${k} ${v.toFixed(2)}，${pre.win} 年样本内分位 ${(pct*100).toFixed(1)}% · ${span} · 数据源 ${srcCn}"
       >${k} ${v.toFixed(2)} · ${Math.round(pct*100)}% ${b.name}</span>`;
@@ -459,7 +459,9 @@ function renderValBar(){
   }
   let srcTxt = `源 ${VDATA.src || '—'}`;
   if (Object.values(VDATA.srcByItem || {}).includes('miaoxiang'))
-    srcTxt += '（妙想项需 MX_APIKEY，服务器无 key 时沿用旧数据）';
+    srcTxt += '（妙想项需 MX_APIKEY）';
+  if (Object.values(VDATA.srcByItem || {}).includes('csindex+roe'))
+    srcTxt += '（中证A500：PE 取中证官网官方值，PB = PE×自算ROE，无需 key）';
   // 估值序列本身陈旧（>30 天未更新）要提示，避免拿老分位做判断
   const stale = [];
   for (const it of Object.values(VDATA.items)){

@@ -6,6 +6,9 @@ __pycache__/
 # 抓取中间产物
 data/_mxout/
 data/valuation/_tmp*/
+# 财务缓存（可自动重建，首次约需 4 分钟；不入库避免仓库膨胀）
+data/valuation/_a500_fin.json
+data/valuation/_calib_fin.json
 
 # 测试截图
 tools/_screenshots/

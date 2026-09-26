@@ -32,7 +32,10 @@ const arrows = new Set([...js.matchAll(/(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s
 console.log('\n定义的函数:', [...defs, ...arrows].sort().join(', '));
 
 // 检查所有 裸调用 foo( 是否已定义或是内置
-const builtins = new Set(['if','for','while','switch','catch','typeof','return','function','Math','JSON','Date','Set','Map','Array','Object','String','Number','parseInt','parseFloat','isNaN','encodeURIComponent','decodeURIComponent','requestAnimationFrame','setTimeout','setInterval','clearTimeout','Chart','console','Array','Promise','new','else','do','try','of','in','void','delete','instanceof','super','this','window','document','localStorage','navigator','URL','Blob','IntersectionObserver','addEventListener','parseDate','toKey','daysBetween','shift']);
+const builtins = new Set(['if','for','while','switch','catch','typeof','return','function','Math','JSON','Date','Set','Map','Array','Object','String','Number','parseInt','parseFloat','isNaN','encodeURIComponent','decodeURIComponent','requestAnimationFrame','setTimeout','setInterval','clearTimeout','Chart','console','Array','Promise','new','else','do','try','of','in','void','delete','instanceof','super','this','window','document','localStorage','navigator','URL','Blob','IntersectionObserver','addEventListener','parseDate','toKey','daysBetween','shift',
+  // 以下为误报：async/await 是关键字，beforeDatasetsDraw 是 Chart.js 插件钩子，
+  // rgba()/var() 出现在 CSS 模板字符串里
+  'async','await','beforeDatasetsDraw','rgba','var']);
 const called = new Set([...js.matchAll(/(?<![\w$.'"])([A-Za-z_$][\w$]*)\s*\(/g)].map(m => m[1]));
 const undef = [...called].filter(c => !defs.has(c) && !arrows.has(c) && !builtins.has(c)
   && !(c[0] === c[0].toUpperCase())   // 构造函数/类
