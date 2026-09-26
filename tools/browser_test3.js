@@ -86,9 +86,11 @@ async function pickTarget() {
     console.log('5 档定义      :', await ev(`(window.VALUATION_DATA.bands||[]).map(b=>b.name+'<'+Math.round(b.hi*100)+'%:'+b.color).join('  ')`));
     console.log('工具栏估值行  :', await ev(`getComputedStyle(document.querySelector('#valRow')).display`));
 
+    const SHOTS = path.join(__dirname, '_screenshots');   // 截图归入 tools/_screenshots（已 gitignore）
+    fs.mkdirSync(SHOTS, { recursive: true });
     const shot = async name => {
       const r = await send('Page.captureScreenshot', { format: 'png' });
-      const p = path.join(HOME, name);
+      const p = path.join(SHOTS, name);
       fs.writeFileSync(p, Buffer.from(r.result.data, 'base64'));
       return p + '  (' + Math.round(fs.statSync(p).size / 1024) + ' KB)';
     };

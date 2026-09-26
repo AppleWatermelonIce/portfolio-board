@@ -76,9 +76,11 @@ async function pickTarget() {
       await ev(`(function(){const c=document.querySelector('.card[data-id="${pid}"]');if(c)c.scrollIntoView({block:'center'});return !!c})()`);
       await sleep(600);
     };
+    const SHOTS = path.join(__dirname, '_screenshots');   // 截图归入 tools/_screenshots（已 gitignore）
+    fs.mkdirSync(SHOTS, { recursive: true });
     const shot = async name => {
       const r = await send('Page.captureScreenshot', { format: 'png' });
-      const p = path.join(HOME, name);
+      const p = path.join(SHOTS, name);
       fs.writeFileSync(p, Buffer.from(r.result.data, 'base64'));
       return p + ' (' + Math.round(fs.statSync(p).size / 1024) + ' KB)';
     };

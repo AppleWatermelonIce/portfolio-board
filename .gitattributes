@@ -1,0 +1,5 @@
+# 统一换行：文本文件入库统一 LF，检出按本机（Windows 为 CRLF）
+* text=auto eol=lf
+
+# Windows 批处理必须 CRLF，否则执行异常
+*.bat text eol=crlf
