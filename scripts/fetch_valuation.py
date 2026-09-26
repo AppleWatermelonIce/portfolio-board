@@ -2,19 +2,23 @@
 """
 指数估值抓取 —— 供看板画 PE/PB 分位色带
 
-主通道：东财妙想 mx-data（读 D:\\CCWorkspace\\.claude\\skills\\mx-data\\mx_data.py，只读调用）
-  优点：覆盖中证A500；4 个指数同源，口径统一；历史长（A股 10 年 / A500 全历史）
-  需要：环境变量 MX_APIKEY（本机已配置）
-备选：蛋卷 danjuanfunds（无需 key，但不收录 A500）
-  python fetch_valuation.py --dj
+【通道策略：蛋卷优先，妙想只补 A500】
+  ★ 蛋卷 danjuanfunds（默认，免 key）：沪深300 / 标普500 / 纳指100，约 515 点（周频，10 年）
+  ★ 东财妙想 mx-data（仅中证A500 需要，因为蛋卷不收录 000510）：需 MX_APIKEY
+     无 key 时 A500 沿用本地已有 JSON（页面照常显示，但不再更新）
 
-产出 valuation/<id>.json：
-  {"id","name","code","src","updated","n","d":[...],"pe":[...],"pb":[...],"cur":{"pe","pb"}}
+这样设计的目的：**部署到服务器后整条链路不依赖任何 key**。
+服务器只需同步已生成的 assets/valuation.js；若要服务器定时重抓，
+3 个指数走蛋卷完全可行，只有 A500 会因缺 key 而保持旧数据。
 
 用法：
-  python fetch_valuation.py                 # 妙想抓全部 4 个
-  python fetch_valuation.py SH000300        # 只抓指定
-  python fetch_valuation.py --dj            # 改用蛋卷（无 A500）
+  python fetch_valuation.py            # 蛋卷抓 3 个 + 有 key 时妙想补 A500（默认）
+  python fetch_valuation.py --no-mx    # 纯免 key：只抓蛋卷 3 个，A500 沿用旧数据
+  python fetch_valuation.py --mx       # 强制全部走妙想（需 key，4 个同源日频）
+  python fetch_valuation.py SH000300   # 只抓指定
+
+产出 data/valuation/<id>.json：
+  {"id","name","code","src","updated","n","d":[...],"pe":[...],"pb":[...],"cur":{"pe","pb"}}
 """
 import os, sys, json, glob, shutil, subprocess, datetime, time
 
@@ -112,44 +116,83 @@ def dj_fetch_one(pid, djcode, name):
                 for p in arr if p.get(kind) is not None}
     pe, pb = hist("pe"), hist("pb")
     dates = sorted(set(pe) | set(pb))
+    if not dates:
+        raise RuntimeError("蛋卷返回空序列")
+    # 当前值取各自序列最后一个非零点（pe / pb 末日可能不同步）
+    def last_of(m):
+        for x in reversed(dates):
+            if m.get(x): return m[x]
+        return None
     return {"id": pid, "name": name, "code": djcode, "src": "danjuan",
             "updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
             "n": len(dates), "d": dates,
             "pe": [pe.get(x) for x in dates], "pb": [pb.get(x) for x in dates],
-            "cur": {"pe": pe.get(dates[-1]) if dates else None,
-                    "pb": pb.get(dates[-1]) if dates else None}}
+            "cur": {"pe": last_of(pe), "pb": last_of(pb)}}
+
+
+def existing(pid):
+    """已有的本地 JSON（用于 A500 无 key 时沿用）"""
+    p = os.path.join(VDIR, pid + ".json")
+    if not os.path.exists(p): return None
+    try: return json.load(open(p, encoding="utf-8"))
+    except Exception: return None
 
 
 def main():
     os.makedirs(VDIR, exist_ok=True)
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    use_dj = "--dj" in sys.argv
-    want = args or (list(DJ_MAPPING) if use_dj else list(MX_TARGETS))
-    ok = miss = 0
+    force_mx = "--mx" in sys.argv
+    no_mx = "--no-mx" in sys.argv
+    has_key = bool(os.environ.get("MX_APIKEY"))
+    want = args or list(MX_TARGETS)
+    ok = miss = skip = 0
+
+    print(f"通道：蛋卷优先（免 key）"
+          + ("，妙想可用（MX_APIKEY 已设置）" if has_key else "，妙想不可用（无 MX_APIKEY）")
+          + ("  [--mx 强制妙想]" if force_mx else "")
+          + ("  [--no-mx 纯免 key]" if no_mx else ""))
+    print("-" * 96)
+
     for pid in want:
-        if use_dj:
-            if pid not in DJ_MAPPING:
-                print(f"  [SKIP] {pid} 蛋卷无映射"); continue
+        ch = None
+        if force_mx:
+            ch = "mx" if pid in MX_TARGETS else None
+        elif pid in DJ_MAPPING:
+            ch = "dj"                                  # 蛋卷覆盖的，一律走蛋卷
+        elif pid in MX_TARGETS:
+            ch = "mx" if (has_key and not no_mx) else None
+
+        if ch is None:
+            # 蛋卷无收录 + 妙想不可用 → 沿用旧数据
+            old = existing(pid)
+            if old:
+                print(f"  [沿用] {pid} {old['name']:8s} 无 key 可更新，保留 {old.get('src')} 数据 "
+                      f"截止 {old['d'][-1]}（n={old['n']}）")
+            else:
+                print(f"  [SKIP] {pid} 蛋卷不收录且无 MX_APIKEY，页面将不显示其估值底色")
+            skip += 1
+            continue
+
+        if ch == "dj":
             code, name = DJ_MAPPING[pid]
             fn = lambda: dj_fetch_one(pid, code, name)
         else:
-            if pid not in MX_TARGETS:
-                print(f"  [SKIP] {pid} 无妙想映射"); continue
             q, name = MX_TARGETS[pid]
             fn = lambda: mx_fetch_one(pid, q, name)
         try:
             o = fn()
             p = os.path.join(VDIR, pid + ".json")
             json.dump(o, open(p, "w", encoding="utf-8"), ensure_ascii=False)
-            print(f"  [OK ] {pid} {name:8s} n={o['n']:5d}  {o['d'][0]}..{o['d'][-1]}  "
-                  f"PE={o['cur']['pe']} PB={o['cur']['pb']}")
+            print(f"  [OK ] {pid:9s} {name:8s} [{o['src']:9s}] n={o['n']:5d}  "
+                  f"{o['d'][0]}..{o['d'][-1]}  PE={o['cur']['pe']} PB={o['cur']['pb']}")
             ok += 1
         except Exception as e:
             print(f"  [ERR] {pid}: {type(e).__name__}: {str(e)[:160]}")
             miss += 1
         time.sleep(1.0)
     shutil.rmtree(TMP, ignore_errors=True)
-    print(f"\n完成 {ok} 成功 / {miss} 失败  ->  {VDIR}")
+    print("-" * 96)
+    print(f"完成  成功 {ok} / 失败 {miss} / 沿用或跳过 {skip}   ->  {VDIR}")
 
 
 if __name__ == "__main__":

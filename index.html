@@ -413,8 +413,10 @@ function renderValBadge(p){
   const span = pre.short
     ? `实际样本仅 ${pre.spanYears.toFixed(1)} 年（${pre.from} 起，不足 ${pre.win} 年）`
     : `近 ${pre.win} 年样本 ${pre.nWin} 个交易日（${pre.from} ~ ${pre.to}）`;
+  const src = (VDATA.srcByItem || {})[p.id] || '';
+  const srcCn = {danjuan:'蛋卷', miaoxiang:'妙想'}[src] || src || '—';
   el.innerHTML = `<span class="vb" style="background:${b.color}"
-      title="${k} ${v.toFixed(2)}，${pre.win} 年样本内分位 ${(pct*100).toFixed(1)}% · ${span}"
+      title="${k} ${v.toFixed(2)}，${pre.win} 年样本内分位 ${(pct*100).toFixed(1)}% · ${span} · 数据源 ${srcCn}"
       >${k} ${v.toFixed(2)} · ${Math.round(pct*100)}% ${b.name}</span>`;
 }
 
@@ -455,9 +457,21 @@ function renderValBar(){
     const pre = vprep(it, state.valKind, state.valWin);
     if (pre.short) sh.push(`${it.name} 仅 ${pre.spanYears.toFixed(1)} 年`);
   }
+  let srcTxt = `源 ${VDATA.src || '—'}`;
+  if (Object.values(VDATA.srcByItem || {}).includes('miaoxiang'))
+    srcTxt += '（妙想项需 MX_APIKEY，服务器无 key 时沿用旧数据）';
+  // 估值序列本身陈旧（>30 天未更新）要提示，避免拿老分位做判断
+  const stale = [];
+  for (const it of Object.values(VDATA.items)){
+    const last = it.d && it.d[it.d.length - 1];
+    if (!last) continue;
+    const days = (Date.now() - new Date(last).getTime()) / 86400000;
+    if (days > 30) stale.push(`${it.name} ${Math.round(days)} 天`);
+  }
+  if (stale.length) srcTxt += ` · ⚠ 估值序列已陈旧：${stale.join('、')}，需重跑 fetch_valuation.py`;
   $('#valNote').textContent =
     `分位样本：近 ${state.valWin} 年${sh.length ? '（' + sh.join('、') + '，按全部可得数据算）' : ''}`
-    + ` · 覆盖 ${names} · 源 ${VDATA.src || '—'} · ${VDATA.updated || '—'}`;
+    + ` · 覆盖 ${names} · ${srcTxt} · ${VDATA.updated || '—'}`;
 }
 
 /* ============================================================ 区间切片 */

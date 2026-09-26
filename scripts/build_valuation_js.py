@@ -45,11 +45,13 @@ def band_of(p):
     return BANDS[-1][1], BANDS[-1][2]
 
 
+SRC_CN = {"danjuan": "蛋卷", "miaoxiang": "妙想"}     # 来源中文名（可能混合：蛋卷×3 + 妙想×1）
+
 def main():
     files = sorted(glob.glob(os.path.join(VDIR, "*.json")))
     out = {"updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
            "bands": [{"hi": h, "name": n, "color": c} for h, n, c in BANDS],
-           "src": "", "items": {}}
+           "src": "", "srcByItem": {}, "items": {}}
     print(f"{'标的':10s} {'源':9s} {'点数':>6s} {'区间':24s} {'当前PE':>8s} {'PE分位':>8s} {'当前PB':>8s} {'PB分位':>8s}")
     print("-" * 92)
     for f in files:
@@ -73,12 +75,17 @@ def main():
                 "n": len(hist),
             }
         out["items"][pid] = item
-        out["src"] = o.get("src", "")
+        out["srcByItem"][pid] = o.get("src", "")
         c = item["cur"]
         fp = lambda k: (f"{c[k]['v']:.2f}" if c[k]["v"] is not None else "—")
         pp = lambda k: (f"{c[k]['pct']*100:.1f}%" if c[k]["pct"] is not None else "—")
         print(f"{o['name']:10s} {o.get('src',''):9s} {o['n']:6d} "
               f"{o['d'][0]}..{o['d'][-1]}  {fp('pe'):>8s} {pp('pe'):>8s} {fp('pb'):>8s} {pp('pb'):>8s}")
+    # 来源汇总（可能混合：蛋卷×3 + 妙想×1）
+    grp = {}
+    for pid, it in out["items"].items():
+        grp.setdefault(it["src"], []).append(it["name"])
+    out["src"] = " + ".join(f"{SRC_CN.get(k, k)}×{len(v)}" for k, v in grp.items())
     p = os.path.join(ASSETS, "valuation.js")
     with open(p, "w", encoding="utf-8") as f:
         f.write("window.VALUATION_DATA = ")
