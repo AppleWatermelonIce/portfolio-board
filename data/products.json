@@ -1,0 +1,50 @@
+{
+  "updated": "",
+  "note": "",
+  "products": [
+    {"id": "000333", "name": "美的集团", "code": "000333.SZ", "group": "A股个股", "src": "em", "secid": "0.000333", "unit": "元"},
+    {"id": "000651", "name": "格力电器", "code": "000651.SZ", "group": "A股个股", "src": "em", "secid": "0.000651", "unit": "元"},
+    {"id": "000933", "name": "神火股份", "code": "000933.SZ", "group": "A股个股", "src": "em", "secid": "0.000933", "unit": "元"},
+    {"id": "002050", "name": "三花智控", "code": "002050.SZ", "group": "A股个股", "src": "em", "secid": "0.002050", "unit": "元"},
+    {"id": "002475", "name": "立讯精密", "code": "002475.SZ", "group": "A股个股", "src": "em", "secid": "0.002475", "unit": "元"},
+    {"id": "002714", "name": "牧原股份", "code": "002714.SZ", "group": "A股个股", "src": "em", "secid": "0.002714", "unit": "元"},
+    {"id": "600036", "name": "招商银行", "code": "600036.SH", "group": "A股个股", "src": "em", "secid": "1.600036", "unit": "元"},
+    {"id": "600276", "name": "恒瑞医药", "code": "600276.SH", "group": "A股个股", "src": "em", "secid": "1.600276", "unit": "元"},
+    {"id": "600941", "name": "中国移动", "code": "600941.SH", "group": "A股个股", "src": "em", "secid": "1.600941", "unit": "元"},
+    {"id": "601899", "name": "紫金矿业", "code": "601899.SH", "group": "A股个股", "src": "em", "secid": "1.601899", "unit": "元"},
+    {"id": "603259", "name": "药明康德", "code": "603259.SH", "group": "A股个股", "src": "em", "secid": "1.603259", "unit": "元"},
+    {"id": "603486", "name": "科沃斯",   "code": "603486.SH", "group": "A股个股", "src": "em", "secid": "1.603486", "unit": "元"},
+    {"id": "603993", "name": "洛阳钼业", "code": "603993.SH", "group": "A股个股", "src": "em", "secid": "1.603993", "unit": "元"},
+
+    {"id": "00700",  "name": "腾讯控股", "code": "00700.HK",  "group": "港股个股", "src": "em", "secid": "116.00700", "unit": "HKD"},
+
+    {"id": "SH000510", "name": "中证A500",  "code": "000510.SH", "group": "指数", "src": "em", "secid": "1.000510", "unit": "点"},
+    {"id": "SH000300", "name": "沪深300",   "code": "000300.SH", "group": "指数", "src": "em", "secid": "1.000300", "unit": "点"},
+    {"id": "SPX",      "name": "标普500",   "code": "SPX",       "group": "指数", "src": "sina", "secid": ".INX",      "unit": "点",
+     "chan": "sina",  "chan2": "auto", "secid2": "100.SPX"},
+    {"id": "NDX100",   "name": "纳斯达克100", "code": "NDX",     "group": "指数", "src": "sina", "secid": ".NDX",     "unit": "点",
+     "chan": "sina",  "chan2": "auto", "secid2": "100.NDX100"},
+
+    {"id": "513260", "name": "恒生科技ETF", "code": "513260.SH", "group": "场内ETF", "src": "em", "secid": "1.513260", "unit": "元"},
+
+    {"id": "024027", "name": "招商均衡优选混合A",        "code": "024027", "group": "开放式基金", "src": "fund", "secid": "024027", "unit": "元"},
+    {"id": "217021", "name": "招商优势企业混合A",        "code": "217021", "group": "开放式基金", "src": "fund", "secid": "217021", "unit": "元"},
+    {"id": "006122", "name": "华安低碳生活混合A",        "code": "006122", "group": "开放式基金", "src": "fund", "secid": "006122", "unit": "元"},
+    {"id": "006227", "name": "华宝科技先锋混合A",        "code": "006227", "group": "开放式基金", "src": "fund", "secid": "006227", "unit": "元"},
+    {"id": "018344", "name": "华夏中证机器人ETF联接A",   "code": "018344", "group": "开放式基金", "src": "fund", "secid": "018344", "unit": "元"},
+    {"id": "006195", "name": "国金量化多因子股票A",      "code": "006195", "group": "开放式基金", "src": "fund", "secid": "006195", "unit": "元"},
+    {"id": "018823", "name": "国金智享量化选股混合A",    "code": "018823", "group": "开放式基金", "src": "fund", "secid": "018823", "unit": "元"},
+    {"id": "025776", "name": "鹏华启航量化选股混合发起式","code": "025776", "group": "开放式基金", "src": "fund", "secid": "025776", "unit": "元"},
+    {"id": "320016", "name": "诺安多策略混合A",          "code": "320016", "group": "开放式基金", "src": "fund", "secid": "320016", "unit": "元"},
+
+    {"id": "006327", "name": "易方达中概互联ETF联接(QDII)A", "code": "006327", "group": "QDII基金", "src": "fund", "secid": "006327", "unit": "元"},
+    {"id": "006328", "name": "易方达中概互联ETF联接(QDII)C", "code": "006328", "group": "QDII基金", "src": "fund", "secid": "006328", "unit": "元"},
+    {"id": "025787", "name": "大成港股恒信混合(QDII)",       "code": "025787", "group": "QDII基金", "src": "fund", "secid": "025787", "unit": "元"},
+
+    {"id": "518880", "name": "黄金（人民币）", "code": "518880.SH", "group": "商品/汇率", "src": "em", "secid": "1.518880", "unit": "元",
+     "note": "以黄金ETF华安(518880)净值代理，跟踪上金所Au99.99人民币现货"},
+    {"id": "USDCNH", "name": "美元/人民币",   "code": "USDCNY",    "group": "商品/汇率", "src": "fx", "secid": "USD-CNY", "unit": "CNY",
+     "chan": "fr",
+     "note": "欧洲央行每日参考汇率（Frankfurter API），浏览器端可直接增量更新"}
+  ]
+}

@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# 抓取中间产物
+data/_mxout/
+data/valuation/_tmp*/
+
+# 测试截图
+tools/_screenshots/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.swp
+
+# 本机编辑器 / IDE
+.vscode/
+.idea/

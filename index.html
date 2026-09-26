@@ -1,0 +1,1035 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>持仓净值曲线</title>
+<style>
+:root{
+  --bg:#f6f6f7; --card:#ffffff; --line:#e5e5e9; --line2:#f0f0f2;
+  --text:#16161a; --muted:#76767d; --muted2:#9a9aa1;
+  --up:#d0382f; --down:#12a05c; --accent:#2a6bd0; --accent-soft:#eaf1fb;
+  --chip:#f2f3f5;
+  --radius:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1380px;margin:0 auto;padding:0 20px 64px}
+
+/* ---------- header ---------- */
+header{padding:22px 0 12px}
+h1{font-size:20px;font-weight:650;margin:0 0 4px;letter-spacing:-.2px}
+.sub{color:var(--muted);font-size:12.5px}
+.sub b{color:var(--text);font-weight:600}
+.tips{margin-top:8px;font-size:12px;color:var(--muted2)}
+.tips code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:11.5px}
+
+/* ---------- toolbar ---------- */
+.toolbar{
+  position:sticky;top:0;z-index:30;background:rgba(246,246,247,.93);
+  backdrop-filter:saturate(180%) blur(10px);
+  padding:10px 0 12px;margin-bottom:14px;border-bottom:1px solid var(--line);
+}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.row + .row{margin-top:9px}
+.lab{font-size:12px;color:var(--muted);margin-right:2px;flex:none}
+.tabs{display:flex;gap:0;background:var(--chip);padding:3px;border-radius:9px;flex-wrap:wrap}
+.tab{
+  border:0;background:transparent;color:var(--muted);font-size:13px;
+  padding:5px 13px;border-radius:7px;cursor:pointer;font-family:inherit;
+  transition:background .12s,color .12s;white-space:nowrap;
+}
+.tab:hover{color:var(--text)}
+.tab.on{background:var(--card);color:var(--text);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{
+  border:1px solid var(--line);background:var(--card);color:var(--muted);
+  font-size:12px;padding:4px 11px;border-radius:20px;cursor:pointer;font-family:inherit;
+  transition:.12s;
+}
+.chip:hover{border-color:#cfcfd6;color:var(--text)}
+.chip.on{background:var(--accent-soft);border-color:#bcd3f2;color:var(--accent);font-weight:600}
+input[type=text],input[type=date],select{
+  border:1px solid var(--line);background:var(--card);border-radius:8px;
+  padding:6px 10px;font-size:13px;font-family:inherit;color:var(--text);outline:none;
+}
+input:focus,select:focus{border-color:var(--accent)}
+.btn{
+  border:1px solid var(--line);background:var(--card);color:var(--text);
+  font-size:12.5px;padding:6px 13px;border-radius:8px;cursor:pointer;font-family:inherit;transition:.12s;
+}
+.btn:hover{border-color:#cfcfd6;background:#fafafb}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.pri:hover{background:#2459b3;border-color:#2459b3}
+.spacer{flex:1}
+.count{font-size:12px;color:var(--muted2)}
+
+/* ---------- summary strip ---------- */
+.strip{
+  display:grid;grid-template-columns:repeat(auto-fill,minmax(152px,1fr));gap:8px;margin-bottom:16px;
+}
+.sc{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:9px 11px}
+.sc .n{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sc .v{font-size:16px;font-weight:650;margin-top:2px;letter-spacing:-.3px}
+.up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--muted)}
+
+/* ---------- grid ---------- */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(520px,1fr));gap:14px}
+.card{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  padding:14px 16px 12px;min-width:0;
+}
+.card.wide{grid-column:1/-1}
+.chead{display:flex;align-items:flex-start;gap:10px;margin-bottom:2px}
+.cname{font-size:14.5px;font-weight:620;letter-spacing:-.1px;min-width:0}
+.cmeta{font-size:11.5px;color:var(--muted2);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cact{margin-left:auto;display:flex;gap:4px;flex:none}
+.icon{
+  border:0;background:transparent;color:var(--muted2);cursor:pointer;font-size:13px;
+  padding:2px 6px;border-radius:6px;line-height:1;font-family:inherit;
+}
+.icon:hover{background:var(--chip);color:var(--text)}
+.stats{display:flex;gap:16px;align-items:baseline;margin:8px 0 6px;flex-wrap:wrap}
+.r{font-size:22px;font-weight:680;letter-spacing:-.6px;line-height:1.1}
+.stat{font-size:11.5px;color:var(--muted);white-space:nowrap}
+.stat b{color:var(--text);font-weight:600;font-size:12.5px}
+.chartbox{height:232px;position:relative;margin-top:4px}
+.card.wide .chartbox{height:420px}
+.nodata{color:var(--muted2);font-size:12.5px;padding:30px 0;text-align:center}
+.legendline{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;font-size:11.5px;color:var(--muted)}
+.legendline span{display:flex;align-items:center;gap:4px;cursor:pointer}
+.legendline i{width:14px;height:3px;border-radius:2px;display:inline-block}
+.legendline span.off{opacity:.32}
+.empty{padding:50px 0;text-align:center;color:var(--muted2)}
+
+/* ---------- 估值底色（PE / PB 历史分位） ---------- */
+.vb{
+  display:inline-flex;align-items:center;font-size:11px;font-weight:600;color:#fff;
+  padding:1px 8px;border-radius:20px;margin-left:8px;vertical-align:1px;white-space:nowrap;
+  letter-spacing:.1px;box-shadow:0 1px 1px rgba(0,0,0,.08);
+}
+.vlegend{display:flex;align-items:center;gap:9px;font-size:11px;color:var(--muted2);flex-wrap:wrap}
+.vlegend i{width:15px;height:9px;border-radius:2px;display:inline-block;vertical-align:-1px;margin-right:3px}
+.vnote{font-size:11.5px;color:var(--muted2)}
+
+/* ---------- dialog ---------- */
+dialog{
+  border:1px solid var(--line);border-radius:14px;padding:0;box-shadow:0 18px 50px rgba(0,0,0,.16);
+  max-width:660px;width:92vw;color:var(--text);
+}
+dialog::backdrop{background:rgba(20,20,24,.34)}
+.dhead{padding:15px 20px;border-bottom:1px solid var(--line2);font-size:15px;font-weight:620}
+.dbody{padding:16px 20px;max-height:66vh;overflow:auto}
+.dfoot{padding:12px 20px;border-top:1px solid var(--line2);display:flex;gap:8px;justify-content:flex-end}
+.frow{display:flex;gap:10px;align-items:center;margin-bottom:11px}
+.frow label{width:86px;flex:none;font-size:12.5px;color:var(--muted)}
+.frow input,.frow select{flex:1;min-width:0}
+.hint{font-size:11.5px;color:var(--muted2);margin:-6px 0 12px 96px}
+.plist{border:1px solid var(--line);border-radius:9px;max-height:300px;overflow:auto}
+.pitem{display:flex;align-items:center;gap:9px;padding:7px 12px;border-bottom:1px solid var(--line2);font-size:13px}
+.pitem:last-child{border-bottom:0}
+.pitem .pn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pitem .pg{font-size:11px;color:var(--muted2);flex:none}
+.sw{width:15px;height:15px;flex:none;cursor:pointer}
+.sect{font-size:12px;color:var(--muted);margin:14px 0 8px;font-weight:600}
+.note{background:var(--chip);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--muted);line-height:1.65}
+.note kbd{background:var(--card);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:11px}
+.toast{
+  position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:99;
+  background:#16161a;color:#fff;padding:9px 18px;border-radius:9px;font-size:13px;
+  opacity:0;pointer-events:none;transition:opacity .2s;
+}
+.toast.on{opacity:1}
+footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted2);line-height:1.8}
+@media (max-width:640px){
+  .grid{grid-template-columns:1fr}
+  .wrap{padding:0 12px 48px}
+  .r{font-size:19px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>持仓净值曲线</h1>
+    <div class="sub">数据更新于 <b id="upd">—</b> · 共 <b id="pcount">—</b> 个标的 · 收益曲线以区间起点为 <b>0%</b></div>
+    <div class="tips">
+      口径：股票/ETF 为<b>后复权收盘价</b>；开放式基金为<b>红利再投资复权净值</b>（含分红与份额折算）；黄金以黄金ETF华安(518880)代理上金所 Au99.99 人民币现货；汇率为美元兑人民币。
+      <span style="color:var(--up)">红涨</span> / <span style="color:var(--down)">绿跌</span>（A股习惯）。<br>
+      <b>打开网页即自动补齐最新数据</b>：同一天内多次打开只更新一次；右侧按钮可手动强刷。全历史基座由 <code>update_data.py</code> 生成。
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <div class="row">
+      <span class="lab">区间</span>
+      <div class="tabs" id="ranges"></div>
+      <div class="spacer"></div>
+      <input type="text" id="q" placeholder="搜索名称 / 代码" style="width:172px">
+      <button class="btn" id="btnRefresh">↻ 立即更新</button>
+      <span id="lstat"></span>
+      <button class="btn" id="btnCmp">叠加对比</button>
+      <button class="btn" id="btnManage">管理标的</button>
+    </div>
+    <div class="row">
+      <span class="lab">分组</span>
+      <div class="chips" id="groups"></div>
+      <div class="spacer"></div>
+      <span class="lab" id="sinceLab" style="display:none">运作起点</span>
+      <input type="date" id="since" style="display:none;width:148px">
+      <span class="count" id="cnt"></span>
+    </div>
+    <div class="row" id="valRow" style="display:none">
+      <span class="lab">估值底色</span>
+      <div class="tabs" id="valTabs">
+        <button class="tab" data-v="off">关</button>
+        <button class="tab" data-v="pe">PE</button>
+        <button class="tab" data-v="pb">PB</button>
+      </div>
+      <span class="lab" id="valWinLab" style="display:none">分位样本</span>
+      <div class="tabs" id="valWinTabs" style="display:none"></div>
+      <span class="vlegend" id="valLegend"></span>
+      <div class="spacer"></div>
+      <span class="vnote" id="valNote"></span>
+    </div>
+  </div>
+
+  <div class="strip" id="strip"></div>
+  <div class="grid" id="grid"></div>
+
+  <footer>
+    <div id="srcnote">数据来源：东方财富 push2his 日K / 天天基金 pingzhongdata。仅供参考，历史收益不构成未来收益承诺。</div>
+    <div>净值披露存在滞后：境内基金通常 T+1，QDII 基金常为 T+2；A股收盘价为当日，港股/美股按各自时区收盘。</div>
+  </footer>
+</div>
+
+<dialog id="dlg">
+  <div class="dhead" id="dlgTitle">管理标的</div>
+  <div class="dbody" id="dlgBody"></div>
+  <div class="dfoot">
+    <button class="btn" id="dlgExport">下载 products.json</button>
+    <button class="btn" id="dlgCmd">复制更新命令</button>
+    <button class="btn pri" id="dlgClose">完成</button>
+  </div>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script src="./assets/vendor/chart.umd.min.js"></script>
+<script src="./assets/data.js"></script>
+<script src="./assets/valuation.js"></script>
+<script>
+/* ============================================================ 常量与工具 */
+const RANGES = [
+  {k:'incep',   t:'成立来'},
+  {k:'since',   t:'运作以来'},
+  {k:'m1',      t:'近一月'},
+  {k:'m3',      t:'近三月'},
+  {k:'m6',      t:'近半年'},
+  {k:'y1',      t:'近一年'},
+  {k:'y3',      t:'近三年'},
+  {k:'y5',      t:'近五年'},
+  {k:'ytd',     t:'今年来'},
+];
+const UP='#d0382f', DOWN='#12a05c', FLAT='#9a9aa1';
+const PALETTE=['#2a6bd0','#d0382f','#12a05c','#e0a800','#8250c4','#0f8fa8','#e2703a','#4a7a3a','#b5487a','#5a6b8c','#8a6d3b','#3a8fb8'];
+const LS = {hidden:'nv_hidden_v1', since:'nv_since_v1', range:'nv_range_v1'};
+
+const $ = s => document.querySelector(s);
+const fmtPct = v => (v>=0?'+':'') + v.toFixed(2) + '%';
+const cls  = v => v>0.00005?'up':(v<-0.00005?'down':'flat');
+const parseDate = s => { const [y,m,d]=s.split('-').map(Number); return new Date(y,m-1,d); };
+const shift = (dt, months) => new Date(dt.getFullYear(), dt.getMonth()+months, dt.getDate());
+const toKey = dt => dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
+const daysBetween = (a,b) => (parseDate(b)-parseDate(a))/86400000;
+
+/* LTTB 降采样，保形 */
+function lttb(xs, ys, thr){
+  const n = xs.length;
+  if (n <= thr) return {x:xs, y:ys};
+  const out = [0];
+  const every = (n-2)/(thr-2);
+  let a = 0;
+  for(let i=0;i<thr-2;i++){
+    let ax=0, ay=0;
+    const rs = Math.floor(i*every)+1, re = Math.floor((i+1)*every)+1;
+    const ns = Math.floor((i+1)*every)+1, ne = Math.min(Math.floor((i+2)*every)+1, n);
+    const len = Math.max(ne-ns, 1);
+    for(let j=ns;j<ne;j++){ ax += j; ay += +ys[j]; }
+    ax /= len; ay /= len;
+    let best = rs, bestArea = -1;
+    for(let j=rs;j<Math.min(re,n);j++){
+      const area = Math.abs((a - ax) * (+ys[j] - +ys[a]) - (a - j) * (ay - +ys[a]));
+      if(area > bestArea){ bestArea = area; best = j; }
+    }
+    out.push(best); a = best;
+  }
+  out.push(n-1);
+  return {x: out.map(i=>xs[i]), y: out.map(i=>ys[i])};
+}
+
+/* ============================================================ 状态 */
+const DATA = window.PORTFOLIO_DATA || null;
+let state = {
+  range: localStorage.getItem(LS.range) || 'incep',
+  group: '全部',
+  q: '',
+  since: localStorage.getItem(LS.since) || '',
+  hidden: new Set(JSON.parse(localStorage.getItem(LS.hidden) || '[]')),
+  compare: false,
+};
+const charts = new Map();
+
+/* ============================================================ 估值底色（PE / PB 历史分位）
+   数据来自 valuation.js（window.VALUATION_DATA），由 build_valuation_js.py 生成。
+   分位口径：在该标的自身全历史样本内的百分位（与蛋卷/理杏仁口径一致，可交叉验证）。 */
+const VDATA = window.VALUATION_DATA || null;
+const VLS = 'nv_val_v1', VWS = 'nv_valwin_v1';
+const VAL_WINS = [10, 5];                    // 分位样本窗口（年），10 年为默认
+state.valKind = (VDATA && VDATA.items) ? (localStorage.getItem(VLS) || 'off') : 'off';
+if (!['off','pe','pb'].includes(state.valKind)) state.valKind = 'off';
+state.valWin = +localStorage.getItem(VWS) || 10;
+if (!VAL_WINS.includes(state.valWin)) state.valWin = 10;
+
+const _vc = new Map();                       // 估值序列缓存：日期升序 + 排序副本（供二分）
+/* 按「最近 N 年」切出分位样本。样本不足 N 年时用全部可得数据（A500 只有 2024-09 起）。
+   d/v 保留全序列（供按日期取值），s 只取窗口内的排序副本（供算分位）。 */
+function vprep(item, kind, years){
+  years = years || state.valWin || 10;
+  const key = (item.code || item.name) + '|' + kind + '|' + years;
+  if (_vc.has(key)) return _vc.get(key);
+  const ds = item.d || [], vs = item[kind] || [];
+  const D = [], V = [];
+  for (let i = 0; i < ds.length; i++){
+    const v = +vs[i];
+    if (vs[i] != null && isFinite(v) && v > 0){ D.push(ds[i]); V.push(v); }
+  }
+  const last = D.length ? D[D.length-1] : null;
+  let cut = D[0] || null;
+  if (last){
+    const [y, m, d] = last.split('-').map(Number);
+    const cand = (y - years) + '-' + String(m).padStart(2,'0') + '-' + String(d).padStart(2,'0');
+    if (!cut || cand > cut) cut = cand;
+  }
+  let i0 = 0; while (i0 < D.length && D[i0] < cut) i0++;
+  const VV = V.slice(i0);
+  const spanY = (D.length && cut) ? (parseDate(last) - parseDate(cut)) / 86400000 / 365.25 : 0;
+  const o = {
+    d:D, v:V,                                // 全序列（值查询用）
+    s:VV.slice().sort((a,b)=>a-b),           // 窗口内样本（分位用）
+    win:years, from:cut, to:last, nWin:VV.length, nAll:D.length,
+    spanYears: Math.max(0, spanY),
+    short: spanY < years - 0.05,             // 实际样本不足设定窗口
+  };
+  _vc.set(key, o);
+  return o;
+}
+/* 该值在历史样本中的百分位（0~1） */
+function vpct(pre, v){
+  const s = pre.s, n = s.length;
+  if (!n || v == null) return null;
+  let lo = 0, hi = n;
+  while (lo < hi){ const m = (lo + hi) >> 1; if (s[m] <= v) lo = m + 1; else hi = m; }
+  return lo / n;
+}
+/* 取 <= date 的最近一个估值日的值 */
+function vat(pre, date){
+  const D = pre.d, n = D.length;
+  if (!n || date < D[0]) return null;
+  let lo = 0, hi = n - 1;
+  while (lo < hi){ const m = (lo + hi + 1) >> 1; if (D[m] <= date) lo = m; else hi = m - 1; }
+  return pre.v[lo];
+}
+function vband(p){
+  if (p == null || !VDATA || !VDATA.bands) return null;
+  for (const b of VDATA.bands) if (p <= b.hi + 1e-9) return b;
+  return VDATA.bands[VDATA.bands.length - 1];
+}
+function valItem(p){ return (VDATA && VDATA.items) ? (VDATA.items[p.id] || null) : null; }
+function valPre(p, kind){ const it = valItem(p); return it ? vprep(it, kind) : null; }
+
+function hexA(hex, a){
+  const h = String(hex).replace('#','');
+  const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+/* 背景色带：按估值分位档横向分段着色，画在网格之上、曲线之下 */
+const valBandPlugin = {
+  id: 'valBand',
+  beforeDatasetsDraw(chart, args, opts){
+    if (!opts || !opts.pre || !opts.kind) return;
+    const {ctx, chartArea} = chart;
+    const xs = chart.scales && chart.scales.x;
+    const labels = chart.data.labels;
+    if (!xs || !labels || labels.length < 2) return;
+    const pre = opts.pre, n = labels.length, top = chartArea.top, hgt = chartArea.height;
+    const step = chartArea.width / Math.max(1, n - 1);
+    const half = Math.max((isFinite(step) ? step : 1) * 0.5, 0.8) + 0.5;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(chartArea.left, top, chartArea.width, hgt);
+    ctx.clip();
+    let curName = null, curColor = null, x0 = null;
+    const flush = (xEnd) => {
+      if (curName && curColor && x0 != null && xEnd > x0){
+        ctx.fillStyle = hexA(curColor, 0.18);
+        ctx.fillRect(x0, top, Math.max(xEnd - x0, 0.6), hgt);
+      }
+    };
+    for (let i = 0; i < n; i++){
+      const v = vat(pre, labels[i]);
+      const b = vband(vpct(pre, v));
+      const nm = b ? b.name : null;
+      const x = xs.getPixelForValue(labels[i]);
+      if (!isFinite(x)) continue;
+      if (nm !== curName){
+        flush(x - half);
+        curName = nm; curColor = b ? b.color : null; x0 = x - half;
+      }
+    }
+    flush(chartArea.right);
+    ctx.restore();
+  }
+};
+if (window.Chart) Chart.register(valBandPlugin);
+
+/* 卡片标题栏的分位徽章 */
+function renderValBadge(p){
+  const el = document.getElementById('vb-' + p.id);
+  if (!el) return;
+  if (state.valKind === 'off' || !VDATA){ el.innerHTML = ''; return; }
+  const pre = valPre(p, state.valKind);
+  if (!pre || !pre.d.length){ el.innerHTML = ''; return; }
+  const k = state.valKind.toUpperCase();
+  const v = pre.v[pre.v.length - 1];
+  const pct = vpct(pre, v), b = vband(pct);
+  if (v == null || pct == null || !b){ el.innerHTML = ''; return; }
+  const span = pre.short
+    ? `实际样本仅 ${pre.spanYears.toFixed(1)} 年（${pre.from} 起，不足 ${pre.win} 年）`
+    : `近 ${pre.win} 年样本 ${pre.nWin} 个交易日（${pre.from} ~ ${pre.to}）`;
+  el.innerHTML = `<span class="vb" style="background:${b.color}"
+      title="${k} ${v.toFixed(2)}，${pre.win} 年样本内分位 ${(pct*100).toFixed(1)}% · ${span}"
+      >${k} ${v.toFixed(2)} · ${Math.round(pct*100)}% ${b.name}</span>`;
+}
+
+/* 工具栏：估值开关 + 5 档图例 */
+function renderValBar(){
+  const row = $('#valRow');
+  if (!VDATA || !VDATA.items || !Object.keys(VDATA.items).length){ row.style.display = 'none'; return; }
+  row.style.display = '';
+  $('#valTabs').innerHTML = [['off','关'],['pe','PE'],['pb','PB']].map(([v,t]) =>
+    `<button class="tab${state.valKind===v?' on':''}" data-v="${v}">${t}</button>`).join('');
+  $('#valTabs').querySelectorAll('.tab').forEach(b => b.onclick = () => {
+    state.valKind = b.dataset.v;
+    localStorage.setItem(VLS, state.valKind);
+    renderAll();
+  });
+  const on = state.valKind !== 'off';
+  // 分位样本窗口（10 / 5 年）
+  $('#valWinLab').style.display = on ? '' : 'none';
+  $('#valWinTabs').style.display = on ? '' : 'none';
+  $('#valWinTabs').innerHTML = on ? VAL_WINS.map(y =>
+    `<button class="tab${state.valWin===y?' on':''}" data-y="${y}">${y}年</button>`).join('') : '';
+  $('#valWinTabs').querySelectorAll('.tab').forEach(b => b.onclick = () => {
+    state.valWin = +b.dataset.y;
+    localStorage.setItem(VWS, state.valWin);
+    renderAll();
+  });
+
+  $('#valLegend').innerHTML = on ? (VDATA.bands || []).map((b,i) => {
+    const lo = i ? Math.round(VDATA.bands[i-1].hi*100) : 0;
+    return `<span><i style="background:${b.color}"></i>${b.name} ${lo}–${Math.round(b.hi*100)}%</span>`;
+  }).join('') : '';
+
+  const names = Object.values(VDATA.items).map(x => x.name).join('、');
+  if (!on){ $('#valNote').textContent = `可选：${names}`; return; }
+  // 样本不足设定窗口的标的要如实标注（中证A500 只有 2024-09 起）
+  const sh = [];
+  for (const it of Object.values(VDATA.items)){
+    const pre = vprep(it, state.valKind, state.valWin);
+    if (pre.short) sh.push(`${it.name} 仅 ${pre.spanYears.toFixed(1)} 年`);
+  }
+  $('#valNote').textContent =
+    `分位样本：近 ${state.valWin} 年${sh.length ? '（' + sh.join('、') + '，按全部可得数据算）' : ''}`
+    + ` · 覆盖 ${names} · 源 ${VDATA.src || '—'} · ${VDATA.updated || '—'}`;
+}
+
+/* ============================================================ 区间切片 */
+function slice(p, rk){
+  const d = p.d, v = p.v, n = d.length;
+  if (!n) return null;
+  const lastStr = d[n-1];
+  const last = parseDate(lastStr);
+  let start = 0;
+  if (rk === 'incep'){ start = 0; }
+  else if (rk === 'since'){
+    if (!state.since) return {d, v, start:0, anchorMode:false};
+    let i = 0; while (i < n && d[i] < state.since) i++;
+    if (i >= n) return null;
+    start = Math.max(0, i-1);            // 含起点前一日作基准
+  }
+  else if (rk === 'ytd'){
+    const y = last.getFullYear();
+    let i = 0; while (i < n && d[i] < y+'-01-01') i++;
+    start = Math.max(0, i-1);
+  }
+  else {
+    const map = {m1:-1, m3:-3, m6:-6, y1:-12, y3:-36, y5:-60};
+    const target = toKey(shift(last, map[rk]));
+    let i = 0; while (i < n && d[i] < target) i++;
+    if (i >= n) i = n-1;
+    start = Math.max(0, i-1);
+  }
+  return {d: d.slice(start), v: v.slice(start), start};
+}
+
+/* 防御：前复权序列在长周期可能跨入负值（累计现金分红超过当期股价），
+   负值做归一化基准会得到荒谬的收益率。此处把基准推到第一个正值。
+   根治办法是重跑脚本取后复权口径；这里只是不让页面显示错误数字。 */
+function sanitize(s){
+  if (!s) return s;
+  let i = 0;
+  while (i < s.v.length && !(s.v[i] > 0)) i++;
+  if (i > 0 && i < s.v.length)
+    return {d: s.d.slice(i), v: s.v.slice(i), trimmed: i, cutAt: s.d[i]};
+  return s;
+}
+
+function metrics(p){
+  const raw = slice(p, state.range);
+  if (!raw || raw.d.length < 2) return null;
+  const s = sanitize(raw);
+  const v0 = s.v[0], vn = s.v[s.d.length-1];
+  const ret = vn/v0 - 1;
+  let peak = s.v[0], mdd = 0;
+  for (const x of s.v){ if (x > peak) peak = x; const dd = x/peak - 1; if (dd < mdd) mdd = dd; }
+  const days = daysBetween(s.d[0], s.d[s.d.length-1]);
+  const ann = days > 20 ? Math.pow(vn/v0, 365/days) - 1 : NaN;
+  const prev = p.v[Math.max(0, p.v.length-2)];
+  const lastChg = prev ? p.v[p.v.length-1]/prev - 1 : NaN;
+  return {ret, mdd, ann, days, lastChg, n:s.d.length, from:s.d[0], to:s.d[s.d.length-1], s,
+          trimmed: s.trimmed || 0, cutAt: s.cutAt || ''};
+}
+
+/* ============================================================ 渲染工具栏 */
+function renderToolbar(){
+  $('#ranges').innerHTML = RANGES.map(r =>
+    `<button class="tab${state.range===r.k?' on':''}" data-r="${r.k}">${r.t}</button>`).join('');
+  $('#ranges').querySelectorAll('.tab').forEach(b =>
+    b.onclick = () => { state.range = b.dataset.r; localStorage.setItem(LS.range, state.range); renderAll(); });
+
+  const gs = ['全部', ...new Set(DATA.products.map(p=>p.group))];
+  $('#groups').innerHTML = gs.map(g =>
+    `<button class="chip${state.group===g?' on':''}" data-g="${g}">${g}</button>`).join('');
+  $('#groups').querySelectorAll('.chip').forEach(b =>
+    b.onclick = () => { state.group = b.dataset.g; renderAll(); });
+
+  const isSince = state.range === 'since';
+  $('#since').style.display = isSince ? '' : 'none';
+  $('#sinceLab').style.display = isSince ? '' : 'none';
+  $('#since').value = state.since;
+  renderValBar();
+}
+
+function visibleProducts(){
+  const q = state.q.trim().toLowerCase();
+  return DATA.products.filter(p => {
+    if (state.hidden.has(p.id)) return false;
+    if (state.group !== '全部' && p.group !== state.group) return false;
+    if (q && !(p.name.toLowerCase().includes(q) || String(p.code).toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+
+/* ============================================================ 图表 */
+function chartConfig(idxs, labels, seriesList, opts){
+  return {
+    type:'line',
+    data:{
+      labels,
+      datasets: seriesList.map(s => ({
+        label: s.name,
+        data: s.data,
+        borderColor: s.color,
+        borderWidth: s.width || 1.7,
+        backgroundColor: s.fill ? s.color + '14' : 'transparent',
+        fill: !!s.fill,
+        pointRadius: 0,
+        pointHoverRadius: 3.5,
+        pointHoverBackgroundColor: s.color,
+        tension: 0,
+        spanGaps: true,
+        segment: s.seg ? {
+          borderColor: c => {
+            const a = c.p0.parsed.y, b = c.p1.parsed.y;
+            return b >= a ? UP : DOWN;
+          }
+        } : undefined,
+      }))
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false, animation:false,
+      interaction:{mode:'index', intersect:false},
+      plugins:{
+        legend:{display:false},
+        valBand: (opts && opts.valBand) ? opts.valBand : {},
+        tooltip:{
+          backgroundColor:'rgba(22,22,26,.94)', padding:9, cornerRadius:7,
+          titleColor:'#fff', bodyColor:'#e8e8ea', titleFont:{size:12}, bodyFont:{size:12},
+          displayColors:false,
+          callbacks:{
+            title: it => it[0].label,
+            label: c => {
+              const i = c.dataIndex;
+              const s = seriesList[c.datasetIndex];
+              let t = (s.name ? s.name + '  ' : '') + (c.parsed.y>=0?'+':'') + c.parsed.y.toFixed(2) + '%';
+              if (s.raw) t += '   净值 ' + s.raw[i].toFixed(4);
+              if (s.vval && s.vval[i] != null){
+                const p = vpct(s.vpre, s.vval[i]);
+                t += `   ${s.vkind||''} ${s.vval[i].toFixed(2)}`;
+                if (p != null) t += ` (${Math.round(p*100)}%)`;
+              }
+              return t;
+            }
+          }
+        }
+      },
+      scales:{
+        x:{ grid:{display:false}, border:{color:'#e5e5e9'},
+            ticks:{ maxTicksLimit:8, autoSkip:true, color:'#9a9aa1', font:{size:10.5}, maxRotation:0 } },
+        y:{ position:'right',
+            grid:{ color:(c)=> c.tick.value===0 ? '#c8c8cf' : '#f1f1f3' },
+            border:{display:false},
+            ticks:{ callback:v=>v.toFixed(0)+'%', color:'#9a9aa1', font:{size:10.5} } }
+      }
+    }
+  };
+}
+
+/* 估值模式下为某条曲线附加估值信息（无估值数据则返回 null） */
+function valSeries(p, dates){
+  if (state.valKind === 'off' || !VDATA) return null;
+  const pre = valPre(p, state.valKind);
+  if (!pre || pre.d.length < 30) return null;
+  return {vkind: state.valKind.toUpperCase(), vpre: pre, vval: dates.map(d => vat(pre, d))};
+}
+
+function drawChart(canvas, p){
+  if (charts.has(canvas)) { charts.get(canvas).destroy(); charts.delete(canvas); }
+  const m = metrics(p);
+  if (!m){ canvas.style.display='none'; const n = canvas.parentNode.querySelector('.nodata'); if(n) n.style.display=''; return; }
+  canvas.style.display='';
+  const nd = canvas.parentNode.querySelector('.nodata'); if(nd) nd.style.display='none';
+  const s = m.s;
+  const ratio = s.v.map(x => (x/s.v[0] - 1) * 100);
+  const L = lttb(s.d, ratio, 900);
+  const vs = valSeries(p, L.x);
+  const base = {name:p.name, data:L.y.map(y=>+y.toFixed(3)),
+    raw:L.y.map((_,i)=>s.v[Math.round(i*(s.v.length-1)/Math.max(1,L.y.length-1))]),
+    color:UP, fill:!vs, seg:true};
+  if (vs) Object.assign(base, vs);
+  const ch = new Chart(canvas.getContext('2d'),
+    chartConfig(null, L.x, [base], {valBand: vs ? {kind:vs.vkind, pre:vs.vpre} : null}));
+  charts.set(canvas, ch);
+}
+
+/* ============================================================ 卡片 */
+function cardHTML(p, i){
+  return `<div class="card" data-id="${p.id}">
+    <div class="chead">
+      <div style="min-width:0">
+        <div class="cname">${p.name}<span id="vb-${p.id}"></span></div>
+        <div class="cmeta">${p.code} · ${p.group}${p.note?' · '+p.note:''}</div>
+      </div>
+      <div class="cact">
+        <button class="icon" data-act="zoom" title="放大">⤢</button>
+        <button class="icon" data-act="hide" title="隐藏">✕</button>
+      </div>
+    </div>
+    <div class="stats" id="st-${p.id}"></div>
+    <div class="chartbox"><canvas></canvas><div class="nodata" style="display:none">该区间数据不足</div></div>
+  </div>`;
+}
+
+function renderStats(p){
+  const el = document.getElementById('st-'+p.id);
+  if (!el) return;
+  renderValBadge(p);
+  const m = metrics(p);
+  if (!m){ el.innerHTML = `<span class="stat">该区间数据不足</span>`; return; }
+  const unitLatest = p.unit === '点' ? '' : (p.unit==='CNY' ? '' : ' ' + p.unit);
+  const lastVal = (p.v[p.v.length-1]).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:4});
+  el.innerHTML = `
+    <span class="r ${cls(m.ret*100)}">${fmtPct(m.ret*100)}</span>
+    <span class="stat">最大回撤 <b class="${cls(m.mdd*100)}">${fmtPct(m.mdd*100)}</b></span>
+    <span class="stat">${isNaN(m.ann)?'—':'年化 <b class="'+cls(m.ann*100)+'">'+fmtPct(m.ann*100)+'</b>'}</span>
+    <span class="stat">最新 <b>${lastVal}${unitLatest}</b>
+      <span class="${cls(m.lastChg*100)}">${fmtPct(m.lastChg*100)}</span></span>
+    <span class="stat" style="color:var(--muted2)">${m.from} → ${m.to}</span>
+    ${m.trimmed ? `<span class="stat" style="color:#a3312a">⚠ 前复权早期股价失真（累计分红超出当期股价），
+       起点已顺延至 ${m.cutAt}；执行 <code>python update_data.py --full</code> 取后复权口径可修复</span>` : ''}`;
+}
+
+/* ============================================================ 汇总条 */
+function renderStrip(list){
+  const rows = list.map(p => ({p, m:metrics(p)})).filter(x=>x.m)
+                   .sort((a,b)=>b.m.ret-a.m.ret);
+  if (!rows.length){ $('#strip').innerHTML=''; return; }
+  const top = rows.slice(0,6), bot = rows.slice(-3).reverse();
+  const card = r => `<div class="sc">
+      <div class="n">${r.p.name}</div>
+      <div class="v ${cls(r.m.ret*100)}">${fmtPct(r.m.ret*100)}</div>
+    </div>`;
+  $('#strip').innerHTML = top.map(card).join('') + bot.map(card).join('');
+}
+
+/* ============================================================ 对比图 */
+function renderCompare(){
+  const list = visibleProducts();
+  const host = $('#grid');
+  host.innerHTML = `<div class="card wide" id="cmpCard">
+      <div class="chead"><div>
+        <div class="cname">叠加对比 · ${RANGES.find(r=>r.k===state.range).t}</div>
+        <div class="cmeta">以各自区间起点归一化为 0%，共 ${list.length} 个标的</div>
+      </div></div>
+      <div class="chartbox"><canvas id="cmpCanvas"></canvas></div>
+      <div class="legendline" id="cmpLegend"></div>
+    </div>`;
+  const series = [], off = new Set();
+  list.forEach((p,i) => {
+    const m = metrics(p); if(!m) return;
+    const s = m.s;
+    const ratio = s.v.map(x => (x/s.v[0]-1)*100);
+    const L = lttb(s.d, ratio, 700);
+    // 对齐到最长序列的标签（各标的交易日可能不同，用并集日期会错，改为各画各的 labels 不现实 -> 统一用第一个的 labels 不可行）
+    series.push({name:p.name, color:PALETTE[i%PALETTE.length], labels:L.x, data:L.y.map(y=>+y.toFixed(3))});
+  });
+  // 用并集日期做 x 轴，缺失处置 null 并 spanGaps
+  const set = new Set(); series.forEach(s=>s.labels.forEach(l=>set.add(l)));
+  const labels = Array.from(set).sort();
+  const idx = new Map(labels.map((l,i)=>[l,i]));
+  const ds = series.map(s => {
+    const arr = new Array(labels.length).fill(null);
+    s.labels.forEach((l,i)=>{ const j = idx.get(l); if(j!==undefined) arr[j] = s.data[i]; });
+    return {name:s.name, data:arr, color:s.color, seg:false, width:1.5};
+  });
+  const cv = $('#cmpCanvas');
+  if (charts.has(cv)) { charts.get(cv).destroy(); charts.delete(cv); }
+  const ch = new Chart(cv.getContext('2d'), chartConfig(null, labels, ds));
+  charts.set(cv, ch);
+  $('#cmpLegend').innerHTML = series.map((s,i)=>
+    `<span data-i="${i}"><i style="background:${s.color}"></i>${s.name}</span>`).join('');
+  $('#cmpLegend').querySelectorAll('span').forEach(sp => sp.onclick = () => {
+    sp.classList.toggle('off');
+    const i = +sp.dataset.i;
+    ch.setDatasetVisibility(i, !ch.isDatasetVisible(i));
+    ch.update();
+  });
+  $('#cnt').textContent = '';
+}
+
+/* ============================================================ 主渲染 */
+let io = null;
+function renderGrid(){
+  const list = visibleProducts();
+  const host = $('#grid');
+  $('#cnt').textContent = `显示 ${list.length} / ${DATA.products.length}`;
+  if (!list.length){ host.innerHTML = `<div class="empty">没有匹配的标的</div>`; $('#strip').innerHTML=''; return; }
+  renderStrip(list);
+  host.innerHTML = list.map(cardHTML).join('');
+  if (io) io.disconnect();
+  io = new IntersectionObserver(ents => {
+    ents.forEach(e => {
+      if (!e.isIntersecting) return;
+      const id = e.target.dataset.id;
+      const p = DATA.products.find(x=>x.id===id);
+      renderStats(p);
+      drawChart(e.target.querySelector('canvas'), p);
+      io.unobserve(e.target);
+    });
+  }, {rootMargin:'260px'});
+  host.querySelectorAll('.card').forEach(c => io.observe(c));
+}
+
+function renderAll(){
+  renderToolbar();
+  // 清掉上一批已脱离文档的 canvas，避免 Chart.js 实例累积
+  if (io) { io.disconnect(); io = null; }
+  for (const [cv, ch] of charts){ if (!cv.isConnected) { ch.destroy(); charts.delete(cv); } }
+  if (state.compare) renderCompare(); else renderGrid();
+}
+
+/* ============================================================ 交互 */
+$('#q').oninput = e => { state.q = e.target.value; if(!state.compare) renderGrid(); else renderCompare(); };
+$('#since').onchange = e => { state.since = e.target.value; localStorage.setItem(LS.since, state.since); renderAll(); };
+$('#btnCmp').onclick = () => {
+  state.compare = !state.compare;
+  $('#btnCmp').textContent = state.compare ? '分图浏览' : '叠加对比';
+  $('#btnCmp').classList.toggle('pri', state.compare);
+  renderAll();
+};
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-act]');
+  if (!b) return;
+  const card = b.closest('.card'); if(!card) return;
+  const id = card.dataset.id;
+  const p = DATA.products.find(x=>x.id===id);
+  if (b.dataset.act === 'hide'){
+    state.hidden.add(id);
+    localStorage.setItem(LS.hidden, JSON.stringify([...state.hidden]));
+    toast(`已隐藏 ${p.name}（可在「管理标的」恢复）`);
+    renderGrid();
+  } else if (b.dataset.act === 'zoom'){
+    zoom(p);
+  }
+});
+
+function zoom(p){
+  const dlg = $('#dlg');
+  $('#dlgTitle').textContent = p.name + '  ' + p.code;
+  $('#dlgBody').innerHTML = `<div style="height:56vh"><canvas id="bigCanvas"></canvas></div>
+    <div id="bigStats" style="margin-top:10px"></div>`;
+  dlg.showModal();
+  requestAnimationFrame(()=>{
+    const m = metrics(p); if(!m) return;
+    const s = m.s;
+    const ratio = s.v.map(x => (x/s.v[0]-1)*100);
+    const L = lttb(s.d, ratio, 1600);
+    const cv = $('#bigCanvas');
+    if (charts.has(cv)) { charts.get(cv).destroy(); charts.delete(cv); }
+    const vs = valSeries(p, L.x);
+    const base = {name:p.name, data:L.y.map(y=>+y.toFixed(3)), raw:s.v, color:UP, fill:!vs, seg:true};
+    if (vs) Object.assign(base, vs);
+    charts.set(cv, new Chart(cv.getContext('2d'),
+      chartConfig(null, L.x, [base], {valBand: vs ? {kind:vs.vkind, pre:vs.vpre} : null})));
+    let vline = '';
+    const vpre = (state.valKind !== 'off') ? valPre(p, state.valKind) : null;
+    if (vpre && vpre.d.length){
+      const vv = vpre.v[vpre.v.length-1], pp = vpct(vpre, vv), bb = vband(pp);
+      if (vv != null && pp != null && bb){
+        vline = `<br>估值 <b>${state.valKind.toUpperCase()} ${vv.toFixed(2)}</b> ·
+          ${vpre.win} 年样本内分位 <b>${(pp*100).toFixed(1)}%</b>
+          <span class="vb" style="background:${bb.color}">${bb.name}</span>
+          <span style="color:var(--muted2)">（${vpre.win} 年窗口 ${vpre.nWin} 个交易日 ·
+            ${vpre.from} ~ ${vpre.to}${vpre.short ? '，实际不足 ' + vpre.win + ' 年' : ''}）</span>`;
+      }
+    }
+    $('#bigStats').innerHTML = `区间 ${m.from} → ${m.to} · ${m.n} 个交易日 ·
+      收益 <b class="${cls(m.ret*100)}">${fmtPct(m.ret*100)}</b> ·
+      最大回撤 <b class="${cls(m.mdd*100)}">${fmtPct(m.mdd*100)}</b> ·
+      年化 <b class="${cls((m.ann||0)*100)}">${isNaN(m.ann)?'—':fmtPct(m.ann*100)}</b>${vline}`;
+  });
+}
+
+/* ============================================================ 管理标的 + 增删 */
+function rebuildProductsJSON(){
+  const arr = DATA.products.map(p => ({
+    id:p.id, name:p.name, code:p.code, group:p.group, src:p.src, secid:p.secid,
+    unit:p.unit || '', ...(p.note ? {note:p.note} : {})
+  }));
+  return {products: arr};
+}
+
+let draft = null;   // 待落盘的 products.json 副本
+
+function ensureDraft(){ if(!draft) draft = JSON.parse(JSON.stringify(rebuildProductsJSON())); return draft; }
+
+function guess(code, kind){
+  code = String(code).trim();
+  if (kind === 'fund') return {src:'fund', secid:code.padStart(6,'0')};
+  if (kind === 'hk'){
+    const c = code.replace(/\D/g,'').padStart(5,'0');
+    return {src:'em', secid:'116.'+c};
+  }
+  if (kind === 'a'){
+    const c = code.replace(/\D/g,'');
+    return {src:'em', secid:(c[0]==='6' ? '1.' : '0.') + c};
+  }
+  if (kind === 'etf'){
+    const c = code.replace(/\D/g,'');
+    return {src:'em', secid:(c[0]==='5' ? '1.' : '0.') + c};
+  }
+  return null;
+}
+
+function openManage(){
+  const d = ensureDraft();
+  $('#dlgTitle').textContent = '管理标的';
+  $('#dlgBody').innerHTML = `
+    <div class="sect">显示 / 隐藏（立即生效，仅存在本机浏览器）</div>
+    <div class="plist" id="togList">
+      ${d.products.map(p=>`
+        <div class="pitem" data-id="${p.id}">
+          <input type="checkbox" class="sw" ${state.hidden.has(p.id)?'':'checked'}>
+          <span class="pn">${p.name}</span>
+          <span class="pg">${p.code} · ${p.group}</span>
+        </div>`).join('')}
+    </div>
+
+    <div class="sect">增加标的（会写入 products.json，需重跑脚本才取到数据）</div>
+    <div class="frow"><label>显示名称</label><input type="text" id="nName" placeholder="如：贵州茅台"></div>
+    <div class="frow"><label>代码</label><input type="text" id="nCode" placeholder="如：600519 或 000001 基金代码"></div>
+    <div class="frow"><label>类型</label>
+      <select id="nKind">
+        <option value="a">A股个股 / A股ETF</option>
+        <option value="hk">港股个股（5位）</option>
+        <option value="fund">开放式基金 / QDII（6位）</option>
+        <option value="idx">指数</option>
+        <option value="fx">外汇 / 商品</option>
+      </select>
+    </div>
+    <div class="frow"><label>分组</label>
+      <input type="text" id="nGroup" placeholder="如：A股个股" value="自选">
+    </div>
+    <div class="frow" id="secidRow" style="display:none"><label>secid</label>
+      <input type="text" id="nSecid" placeholder="指数 1.000300 / 标普 100.SPX / 汇率 133.USDCNH">
+    </div>
+    <div class="frow"><label>单位</label><input type="text" id="nUnit" value="元" style="max-width:110px"></div>
+    <div class="frow"><label></label><button class="btn pri" id="btnAdd">加入清单</button>
+      <button class="btn" id="btnDelMode">从清单移除…</button></div>
+    <div class="hint" style="margin-left:96px" id="guessHint"></div>
+
+    <div class="note" style="margin-top:14px">
+      <b>常见 secid 规则</b><br>
+      · 沪市股票 <kbd>1.600519</kbd>，深市股票 <kbd>0.000333</kbd>（"1."=沪，"0."=深）<br>
+      · 港股 <kbd>116.00700</kbd>（5位补零）<br>
+      · 沪市指数 <kbd>1.000300</kbd>，深市指数 <kbd>0.399001</kbd>，美股指数 <kbd>100.SPX</kbd> / <kbd>100.NDX100</kbd><br>
+      · 离岸人民币 <kbd>133.USDCNH</kbd>，COMEX黄金 <kbd>101.GC00Y</kbd><br>
+      · 开放式基金直接填 6 位代码即可，走天天基金净值通道<br>
+      不确定时可到 quote.eastmoney.com 搜索页面，从 URL 里取 <kbd>secid=</kbd> 后的值。
+    </div>
+    <div class="sect" id="pendingSect" style="display:none">待保存的变更</div>
+    <div id="pendingBox"></div>
+  `;
+  const dlg = $('#dlg');
+  dlg.showModal();
+
+  $('#togList').querySelectorAll('.pitem').forEach(it => {
+    it.querySelector('.sw').onchange = e => {
+      if (e.target.checked) state.hidden.delete(it.dataset.id); else state.hidden.add(it.dataset.id);
+      localStorage.setItem(LS.hidden, JSON.stringify([...state.hidden]));
+      if (!state.compare) renderGrid();
+    };
+  });
+  const syncKind = () => {
+    const k = $('#nKind').value;
+    $('#secidRow').style.display = (k==='idx'||k==='fx') ? '' : 'none';
+    const c = $('#nCode').value.trim();
+    if (k==='idx'||k==='fx'){ $('#guessHint').textContent=''; return; }
+    const g = guess(c, k);
+    $('#guessHint').textContent = c && g ? `将解析为 src=${g.src}  secid=${g.secid}` : '';
+  };
+  $('#nKind').onchange = syncKind;
+  $('#nCode').oninput  = syncKind;
+  syncKind();
+
+  $('#btnAdd').onclick = () => {
+    const name = $('#nName').value.trim(), code = $('#nCode').value.trim();
+    const kind = $('#nKind').value, group = $('#nGroup').value.trim() || '自选';
+    const unit = $('#nUnit').value.trim() || '元';
+    if (!name || !code){ toast('请填写名称与代码'); return; }
+    let src = 'em', secid = '';
+    if (kind==='idx'||kind==='fx'){ secid = $('#nSecid').value.trim(); if(!secid){ toast('请填 secid'); return; } }
+    else { const g = guess(code, kind); if(!g){ toast('代码无法解析'); return; } src=g.src; secid=g.secid; }
+    const id = (kind==='fund') ? code.padStart(6,'0') : secid.replace(/[^0-9A-Za-z]/g,'');
+    if (d.products.some(p=>p.id===id)){ toast('清单中已存在该标的'); return; }
+    d.products.push({id, name, code, group, src, secid, unit});
+    toast(`已加入 ${name}，请下载 products.json 并重跑脚本`);
+    $('#nName').value=''; $('#nCode').value=''; syncKind();
+    renderPending(); openManage();
+  };
+
+  $('#btnDelMode').onclick = () => {
+    $('#pendingBox').innerHTML = `
+      <div class="sect">点击移除（同样需重跑脚本）</div>
+      <div class="plist">${d.products.map((p,i)=>`
+        <div class="pitem"><span class="pn">${p.name}</span>
+          <span class="pg">${p.code}</span>
+          <button class="btn" data-del="${i}">移除</button></div>`).join('')}</div>`;
+    $('#pendingBox').querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+      const p = d.products.splice(+b.dataset.del,1)[0];
+      toast(`已移除 ${p.name}`);
+      openManage(); $('#btnDelMode').click();
+    });
+  };
+  renderPending();
+}
+function renderPending(){
+  const box = $('#pendingBox');
+  if (!box || !draft) return;
+  $('#pendingSect').style.display = '';
+}
+
+$('#btnManage').onclick = openManage;
+$('#dlgClose').onclick = () => { $('#dlg').close(); };
+$('#dlgExport').onclick = () => {
+  const d = ensureDraft();
+  const blob = new Blob([JSON.stringify(d, null, 2)], {type:'application/json;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'products.json';
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 3000);
+  toast('已下载 products.json，覆盖到脚本目录后重跑 update_data.py');
+};
+$('#dlgCmd').onclick = async () => {
+  const cmd = 'python update_data.py';
+  try { await navigator.clipboard.writeText(cmd); toast('已复制：'+cmd); }
+  catch(e){ toast('更新命令：'+cmd); }
+};
+
+/* ============================================================ toast */
+let tt;
+function toast(msg){
+  const t = $('#toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(tt); tt = setTimeout(()=>t.classList.remove('on'), 2600);
+}
+
+/* ============================================================ 启动 */
+(function boot(){
+  if (!DATA || !DATA.products || !DATA.products.length){
+    $('#grid').innerHTML = `<div class="empty" style="padding:70px 20px;line-height:2">
+      <div style="font-size:15px;color:var(--text);margin-bottom:8px">尚未载入数据</div>
+      请先在本目录执行 <code>python update_data.py</code> 生成 data.js，再刷新本页面。
+    </div>`;
+    return;
+  }
+  $('#upd').textContent = DATA.updated || '—';
+  $('#pcount').textContent = DATA.products.length;
+  if (DATA.note) $('#srcnote').textContent = DATA.note + '。数据来源：' + (DATA.source||'东方财富 / 天天基金') + '。仅供参考，历史收益不构成未来收益承诺。';
+
+  // 数据新鲜度提示
+  const ageH = DATA.updated ? (Date.now() - new Date(DATA.updated.replace(' ','T')).getTime())/3.6e6 : 1e9;
+  const alert = document.createElement('div');
+  alert.id = 'fresh';
+  alert.style.cssText = 'margin-top:10px;font-size:12.5px;padding:8px 12px;border-radius:8px;line-height:1.6';
+  if (ageH > 48){
+    alert.style.cssText += ';background:#fdf3f2;border:1px solid #f3cdca;color:#a3312a';
+    alert.innerHTML = `⚠ 数据已 <b>${Math.floor(ageH/24)} 天</b>未更新（最近一次 ${DATA.updated}）。请执行 <code>python update_data.py</code>，或检查计划任务是否正常。`;
+  } else if (DATA.degraded && DATA.degraded.length){
+    alert.style.cssText += ';background:#fdf8ec;border:1px solid #ecd9a8;color:#8a6b1f';
+    alert.innerHTML = `⚠ 上次更新有 <b>${DATA.degraded.length}</b> 个标的抓取失败，已沿用旧数据：${DATA.degraded.join('、')}`;
+  } else {
+    alert.style.cssText += ';background:#f1f8f3;border:1px solid #c6e4d1;color:#1a7248';
+    alert.innerHTML = `✓ 数据新鲜度良好，最近更新 ${DATA.updated}（${ageH<1?Math.round(ageH*60)+' 分钟前':Math.round(ageH)+' 小时前'}）`;
+  }
+  document.querySelector('.tips').after(alert);
+
+  state.range = RANGES.some(r=>r.k===state.range) ? state.range : 'incep';
+  renderAll();
+  addEventListener('resize', () => {
+    clearTimeout(window.__rz);
+    window.__rz = setTimeout(()=>{ if(!state.compare) location.reload(); }, 260);
+  });
+})();
+</script>
+<script src="./assets/live.js"></script>
+</body>
+</html>
