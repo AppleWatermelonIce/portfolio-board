@@ -1,0 +1,93 @@
+# 每日更新净值/估值并部署到 GitHub Pages
+# 设计要点：
+#   · 触发：每日 23:30 北京时间(UTC+8) 定时 + 手动 workflow_dispatch + push
+#   · 数据全免 key：行情走东财/天天基金/腾讯/新浪/雅虎/ECB，估值走蛋卷 + 中证官网PE自算
+#   · 增量更新：data/history 入仓，每次只拉增量并合并；财务缓存走 actions/cache 持久化
+#   · 抓取失败不致命：保留上一次入仓的 JSON（页面照常显示，只是当日不刷新）
+#   · 用 GITHUB_TOKEN 推送会自动带 [skip ci]，不会触发二次 workflow
+name: 每日更新并部署
+
+on:
+  schedule:
+    - cron: '30 15 * * *'      # 15:30 UTC = 23:30 北京时间
+  workflow_dispatch:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-deploy
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 持久化财务缓存（A500 自算 ROE 用）
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/valuation/_a500_fin.json
+            data/valuation/_calib_fin.json
+          key: fin-${{ github.run_id }}
+          restore-keys: |
+            fin-
+
+      - name: 更新行情净值
+        run: python scripts/update_data.py
+
+      - name: 更新估值（蛋卷 + 中证A500 自算）
+        run: python scripts/fetch_valuation.py
+
+      - name: 打包 valuation.js
+        run: python scripts/build_valuation_js.py
+
+      - name: 提交更新
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "无变化，跳过提交"
+          else
+            git commit -m "自动更新 $(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M') [skip ci]"
+            git push
+          fi
+
+      - name: 准备 Pages 产物
+        run: |
+          rm -rf public && mkdir -p public
+          # 站点根目录：index.html + assets(自包含行情/估值数据) + data(历史JSON兜底)
+          cp index.html public/
+          cp -r assets public/
+          cp -r data public/
+          touch public/.nojekyll
+
+      - name: 上传 Pages 产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: update
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

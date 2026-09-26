@@ -13,6 +13,9 @@ data/valuation/_calib_fin.json
 # 测试截图
 tools/_screenshots/
 
+# Actions 部署中间产物（每轮重建，不入仓）
+public/
+
 # 系统与编辑器
 .DS_Store
 Thumbs.db
