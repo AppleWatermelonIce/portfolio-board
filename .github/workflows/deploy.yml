@@ -55,7 +55,7 @@ jobs:
       - name: 打包 valuation.js
         run: python scripts/build_valuation_js.py
 
-      - name: 准备 Pages 产物
+      - name: 准备 Pages 产物（明文，加密延后到 deploy 作业）
         run: |
           rm -rf public && mkdir -p public
           # 站点根目录：index.html + assets(自包含行情/估值数据) + data(历史JSON兜底)
@@ -64,19 +64,10 @@ jobs:
           cp -r data public/
           touch public/.nojekyll
 
-      - name: 设置 Node.js（加密脚本用）
-        uses: actions/setup-node@v4
+      - name: 上传待加密站点产物
+        uses: actions/upload-artifact@v4
         with:
-          node-version: '20'
-
-      - name: 加密敏感数据（缺 SITE_PASSWORD 则报错，拒绝明文部署）
-        env:
-          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
-        run: node tools/encrypt_site.mjs public
-
-      - name: 上传 Pages 产物
-        uses: actions/upload-pages-artifact@v3
-        with:
+          name: site-raw
           path: public
 
       # 数据落库（增量入仓，供下次运行合并）。放在最后且 best-effort：
@@ -102,6 +93,30 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Checkout（取加密脚本）
+        uses: actions/checkout@v4
+
+      - name: 下载待加密站点产物
+        uses: actions/download-artifact@v4
+        with:
+          name: site-raw
+          path: public
+
+      - name: 设置 Node.js（加密脚本用）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 加密敏感数据（缺 SITE_PASSWORD 则报错，拒绝明文部署）
+        env:
+          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+        run: node tools/encrypt_site.mjs public
+
+      - name: 上传 Pages 产物
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
