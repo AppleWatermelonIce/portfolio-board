@@ -30,10 +30,17 @@ h1{font-size:20px;font-weight:650;margin:0 0 4px;letter-spacing:-.2px}
 .tips code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:11.5px}
 
 /* ---------- toolbar ---------- */
+/* 默认（手机 / 平板 / 竖屏）非吸顶：随页面正常滚动，下滑时自然让出屏幕，图表完整可见。
+   仅宽屏桌面（>=1024px）才吸顶，方便滚动到底部时仍能切换区间。 */
 .toolbar{
-  position:sticky;top:0;z-index:30;background:rgba(246,246,247,.93);
-  backdrop-filter:saturate(180%) blur(10px);
   padding:10px 0 12px;margin-bottom:14px;border-bottom:1px solid var(--line);
+}
+@media (min-width:1024px){
+  .toolbar{
+    position:sticky;top:0;z-index:30;
+    background:rgba(246,246,247,.93);
+    backdrop-filter:saturate(180%) blur(10px);
+  }
 }
 .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .row + .row{margin-top:9px}
@@ -150,11 +157,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-si
   .grid{grid-template-columns:1fr}
   .wrap{padding:0 12px 48px}
   .r{font-size:19px}
-  /* 导航栏改为非吸顶：滚动时让出屏幕，图表完整可见；需要时上滑即可操作筛选 */
-  .toolbar{
-    position:static;top:auto;margin-bottom:10px;padding:8px 0 10px;
-    background:transparent;backdrop-filter:none;border-bottom:1px solid var(--line);
-  }
+  /* 窄屏下工具栏已默认非吸顶（随页面滚走）；此处仅做紧凑排版 */
   .toolbar .row{gap:8px}
   .toolbar .tabs{flex-wrap:wrap}
   .toolbar input[type=text]#q{width:100%;flex:1 1 100%;order:5}
