@@ -115,7 +115,9 @@ jobs:
         env:
           _PW_PRIMARY: ${{ secrets.SITE_PASSWORD }}
           _PW_ALIAS: ${{ secrets.APPLWATERMELONICE }}
+          _PW_JOBENV: ${{ env.SITE_PASSWORD }}
         run: |
+          echo "::warning::PWDIAG step_primary_len=${#_PW_PRIMARY} step_alias_len=${#_PW_ALIAS} jobenv_len=${#_PW_JOBENV}"
           if [ -n "$_PW_PRIMARY" ]; then
             echo "✅ SITE_PASSWORD 已注入（长度 ${#_PW_PRIMARY}）"
           elif [ -n "$_PW_ALIAS" ]; then

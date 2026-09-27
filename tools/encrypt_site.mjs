@@ -18,12 +18,14 @@ import { join, basename } from 'node:path';
 
 const ROOT = process.argv[2] || 'public';
 const PASS = process.env.SITE_PASSWORD;
+if (!existsSync(ROOT)) {
+  console.error(`::error::ENC_NOROOT 待加密目录不存在：${ROOT}（cwd=${process.cwd()}）`);
+  process.exit(1);
+}
 if (!PASS) {
-  console.error('❌ 未设置 SITE_PASSWORD：拒绝以明文部署。');
+  console.error('::error::ENC_NOPASS 未读到口令（SITE_PASSWORD 为空）：拒绝以明文部署。');
   console.error('   请到 仓库 Settings → Secrets and variables → Actions → "New repository secret"');
-  console.error('   （注意：必须是「Repository secrets」仓库级密钥，而非「Environments」环境级密钥；');
-  console.error('    加密步骤所在的 update 作业未声明 environment，无法读取环境级密钥。）');
-  console.error('   密钥名必须一字不差为 SITE_PASSWORD。设置后重跑 workflows 即可。');
+  console.error('   密钥名必须一字不差为 SITE_PASSWORD，且须是「Repository secrets」仓库级密钥。');
   process.exit(1);
 }
 
@@ -92,6 +94,6 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error('加密失败:', e);
+  console.error('::error::ENC_FAIL ' + (e && e.message ? e.message : String(e)));
   process.exit(1);
 });
