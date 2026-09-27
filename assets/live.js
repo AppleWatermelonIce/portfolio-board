@@ -182,6 +182,110 @@ async function frRange(pair, sinceDate) {
   return Object.keys(rates).sort().map(d => [d, rates[d][q]]).filter(x => x[1] > 0);
 }
 
+/* ------------------------------------------- ④ 实时价角标（仅展示，不并入收益率曲线）
+   - A股/ETF/指数/港股/美股指数：腾讯 qt.gtimg.cn（<script src> JSONP，不受 CORS 限制）
+   - 开放式基金：天天基金 fundgz（<script src>，日内估算净值 gsz + gszzl）；被 ASN 拦截时降级「—」
+   - 黄金(goldcny) / 汇率(fx)：浏览器端无实时源 → 角标显示「—」
+   颜色遵循 A股习惯：红涨绿跌。 */
+const RT = { data:{}, running:false };
+window.__rtData = RT.data;                 // 供 index.html 渲染卡片时回放缓存
+
+function rtCodeOf(p){
+  if (p.src === 'goldcny' || p.src === 'fx') return {mode:'none'};
+  if (p.src === 'fund') return {mode:'fund', code: String(p.secid || p.code).padStart(6,'0')};
+  const c = channelOf(p);
+  if (c.ch === 'tx') return {mode:'tx', code:c.id};
+  return {mode:'none'};
+}
+function parseTx(str){
+  if (!str || typeof str !== 'string') return null;
+  const f = str.split('~');
+  if (f.length < 33) return null;
+  const price = parseFloat(f[3]);
+  const prev  = parseFloat(f[4]);
+  if (!(price > 0)) return null;
+  let chg = parseFloat(f[32]);                       // 腾讯自带涨跌幅%，直接用
+  if (!(prev > 0) || !isFinite(chg)) chg = (price - prev) / prev * 100;
+  if (!isFinite(chg)) return null;
+  return {price, chg, ts: (f[30] || '').replace(/\//g,'-')};
+}
+function loadTxScript(codes){
+  return new Promise(res => {
+    const url = 'https://qt.gtimg.cn/q=' + encodeURIComponent(codes.join(',')) + '&_=' + Date.now();
+    const s = document.createElement('script');
+    let done = false;
+    const fin = () => { if (done) return; done = true; clearTimeout(t); try{s.remove();}catch(e){} res(true); };
+    const t = setTimeout(fin, 9000);
+    s.charset = 'GBK';
+    s.src = url; s.onload = fin; s.onerror = fin;
+    document.head.appendChild(s);
+  });
+}
+const _fundWaiters = new Map();
+window.jsonpgz = function(d){
+  if (!d || !d.fundcode) return;
+  const w = _fundWaiters.get(d.fundcode);
+  if (w && !w.settled){ w.settled = true; clearTimeout(w.t); try{w.s.remove();}catch(e){} w.res(d); }
+};
+function loadFundScript(code){
+  return new Promise(res => {
+    const s = document.createElement('script');
+    const w = {res, s, settled:false, t:null};
+    w.t = setTimeout(() => { if(!w.settled){ w.settled=true; _fundWaiters.delete(code); try{s.remove();}catch(e){} res(null); } }, 9000);
+    _fundWaiters.set(code, w);
+    s.onload  = () => { if(!w.settled){ w.settled=true; clearTimeout(w.t); _fundWaiters.delete(code); try{s.remove();}catch(e){} res(null); } };
+    s.onerror = () => { if(!w.settled){ w.settled=true; clearTimeout(w.t); _fundWaiters.delete(code); try{s.remove();}catch(e){} res(null); } };
+    s.src = 'https://fundgz.1234567.com.cn/js/' + code + '.js?rt=' + Date.now();
+    document.head.appendChild(s);
+  });
+}
+function fundInfo(d){
+  const gsz = parseFloat(d.gsz), dwjz = parseFloat(d.dwjz), chg = parseFloat(d.gszzl);
+  const price = (isFinite(gsz) && gsz > 0) ? gsz : (isFinite(dwjz) ? dwjz : null);
+  if (price == null || !isFinite(chg)) return null;
+  const isEst = isFinite(gsz) && gsz > 0;
+  return {price, chg, dp:4, tag: isEst ? '估' : '净', ts: d.gztime || ''};
+}
+function inTradingNow(){
+  const t = new Date(Date.now() + 8*3600e3);          // 北京时间
+  const dow = t.getUTCDay();
+  if (dow === 0 || dow === 6) return false;
+  const hm = t.getUTCHours()*60 + t.getUTCMinutes();
+  return (hm >= 570 && hm <= 690) || (hm >= 780 && hm <= 900);   // 09:30–11:30 / 13:00–15:00
+}
+async function fetchRealtime(){
+  if (RT.running) return;
+  RT.running = true;
+  try {
+    const txCodes = [], txMap = new Map();
+    const fundCodes = [], fundMap = new Map();
+    for (const p of D.products){
+      const r = rtCodeOf(p);
+      if (r.mode === 'tx'){ txCodes.push(r.code); txMap.set(r.code, p); }
+      else if (r.mode === 'fund'){ fundCodes.push(r.code); fundMap.set(r.code, p); }
+    }
+    for (let i = 0; i < txCodes.length; i += 40){
+      const chunk = txCodes.slice(i, i+40);
+      await loadTxScript(chunk);
+      for (const code of chunk){
+        const p = txMap.get(code); if (!p) continue;
+        const info = window['v_'+code] ? parseTx(window['v_'+code]) : null;
+        if (info){ info.dp = 2; info.tag = '盘'; }
+        RT.data[p.id] = info || null;
+        if (window.__rtPaint) window.__rtPaint(p.id, info);
+      }
+    }
+    await pool(fundCodes, 3, async (code) => {
+      const p = fundMap.get(code); if (!p) return;
+      const d = await loadFundScript(code);
+      const info = d ? fundInfo(d) : null;
+      RT.data[p.id] = info || null;
+      if (window.__rtPaint) window.__rtPaint(p.id, info);
+    });
+  } catch(e){ /* 实时角标失败不影响主曲线 */ }
+  finally { RT.running = false; }
+}
+
 /* ------------------------------------------------------------- 合并写回 */
 /** 返回 {added, changed}；-1 表示重叠不足不敢合并 */
 function applyPoints(p, pts) {
@@ -367,6 +471,7 @@ async function refresh(force) {
     else
       setStat(`✓ ${t} 检查完毕，数据已是最新`, 'ok');
     window.renderAll && window.renderAll();
+    fetchRealtime();                       // 主曲线刷新后，同步拉一次实时角标
   } catch (e) {
     setStat('联网失败，显示本地数据', 'warn');
   } finally {
@@ -404,6 +509,12 @@ function shouldScan(rec) {
 
   if (shouldScan(rec)) setTimeout(() => refresh(false), 500);
   setInterval(() => { if (shouldScan(loadRec())) refresh(false); }, 30 * 60 * 1000);
+
+  // 实时价角标：打开即拉一次；开盘时段每 30s 刷新（非交易时段只显示最近一次报价）
+  fetchRealtime();
+  setInterval(() => {
+    if (inTradingNow() && !running && navigator.onLine !== false && !document.hidden) fetchRealtime();
+  }, 30000);
 })();
 
 })();

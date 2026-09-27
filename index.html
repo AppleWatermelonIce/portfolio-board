@@ -124,6 +124,15 @@ input:focus,select:focus{border-color:var(--accent)}
 .vlegend i{width:15px;height:9px;border-radius:2px;display:inline-block;vertical-align:-1px;margin-right:3px}
 .vnote{font-size:11.5px;color:var(--muted2)}
 
+/* ---------- 实时价角标（仅展示，不并入收益率曲线） ---------- */
+.rtb{display:inline-flex;align-items:center;font-size:12px;font-weight:600;padding:2px 8px;border-radius:7px;
+  background:#f2f3f5;color:#76767d;white-space:nowrap;line-height:1.5;border:1px solid var(--line2)}
+.rtb b{font-weight:700;margin-left:3px}
+.rtb.up{color:var(--up);background:#fbeceb;border-color:#f3cdca}
+.rtb.down{color:var(--down);background:#e9f6ef;border-color:#c6e4d1}
+.rtb.flat{color:var(--muted);background:#f2f3f5;border-color:#e5e5e9}
+.rtb .ph{opacity:.55;font-weight:500}
+
 /* ---------- dialog ---------- */
 dialog{
   border:1px solid var(--line);border-radius:14px;padding:0;box-shadow:0 18px 50px rgba(0,0,0,.16);
@@ -176,6 +185,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-si
       口径：股票/ETF 为<b>后复权收盘价</b>；开放式基金为<b>红利再投资复权净值</b>（含分红与份额折算）；黄金为<b>COMEX 黄金 × 美元兑人民币</b>折算的人民币元/克；汇率为美元兑人民币。
       <span style="color:var(--up)">红涨</span> / <span style="color:var(--down)">绿跌</span>（A股习惯）。<br>
       <b>打开网页即自动补齐最新数据</b>：同一天内多次打开只更新一次；右侧按钮可手动强刷。全历史基座由 <code>update_data.py</code> 生成。
+      卡片右上角「<b>盘</b>」为实时盘中参考价（股票/ETF/指数/港股/美股，红涨绿跌）、「<b>估</b>」为基金盘中估算净值，<b>仅供查看、不并入收益曲线</b>；黄金/汇率暂无浏览器实时源，显示「—」。
     </div>
   </header>
 
@@ -677,6 +687,7 @@ function cardHTML(p, i){
         <div class="cmeta">${p.code} · ${p.group}${p.note?' · '+p.note:''}</div>
       </div>
       <div class="cact">
+        <span class="rtb" id="rt-${p.id}"></span>
         <button class="icon" data-act="zoom" title="放大">⤢</button>
         <button class="icon" data-act="hide" title="隐藏">✕</button>
       </div>
@@ -686,10 +697,32 @@ function cardHTML(p, i){
   </div>`;
 }
 
+/* 实时价角标渲染：由 live.js 的 fetchRealtime 调用（含懒渲染卡片的缓存回放） */
+window.__rtPaint = function(id, info){
+  const el = document.getElementById('rt-'+id);
+  if (!el) return;
+  if (!info || info.price == null || !isFinite(info.price)){
+    el.className = 'rtb';
+    el.innerHTML = '<span class="ph">实时 —</span>';
+    el.title = '该标的无浏览器端实时源（黄金/汇率）或暂未取得';
+    return;
+  }
+  const c = info.chg > 0.00005 ? 'up' : (info.chg < -0.00005 ? 'down' : 'flat');
+  el.className = 'rtb ' + c;
+  const arrow = info.chg > 0.00005 ? '▲' : (info.chg < -0.00005 ? '▼' : '—');
+  const dp = info.dp || 2;
+  const price = info.price.toLocaleString('zh-CN',
+    {minimumFractionDigits:dp, maximumFractionDigits:dp});
+  const tag = info.tag ? info.tag + ' ' : '';
+  el.innerHTML = tag + price + ' <b>' + arrow + ' ' + fmtPct(info.chg) + '</b>';
+  el.title = '实时参考' + (info.ts ? (' · ' + info.ts) : '') + '（不并入收益曲线）';
+};
+
 function renderStats(p){
   const el = document.getElementById('st-'+p.id);
   if (!el) return;
   renderValBadge(p);
+  if (window.__rtPaint) window.__rtPaint(p.id, (window.__rtData || {})[p.id] || null);
   const m = metrics(p);
   if (!m){ el.innerHTML = `<span class="stat">该区间数据不足</span>`; return; }
   const unitLatest = p.unit === '点' ? '' : (p.unit==='CNY' ? '' : ' ' + p.unit);
