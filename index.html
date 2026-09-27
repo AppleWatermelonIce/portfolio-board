@@ -1148,12 +1148,12 @@ window.__indexBoot = boot;
           style="position:absolute;right:4px;top:50%;transform:translateY(-50%);border:0;background:transparent;cursor:pointer;font-size:15px;line-height:1;padding:6px;color:#7a8290">👁</button>
       </div>
       <label style="display:flex;align-items:center;gap:6px;margin-top:12px;font-size:12px;color:#5b6472;cursor:pointer">
-        <input type="checkbox" id="rememberMe" /> 记住本设备（关闭浏览器后仍免输；明文存于本机）
+        <input type="checkbox" id="rememberMe" /> 记住本设备（下次自动填入口令，仍需点“进入”；明文存于本机）
       </label>
       <div class="lerr" style="color:#c0392b;font-size:12px;min-height:16px;margin:8px 2px 12px"></div>
       <button type="submit" id="loginGo" style="width:100%;padding:11px;border:0;border-radius:9px;background:#2a6bd0;color:#fff;font-size:14px;font-weight:600;cursor:pointer">进入</button>
     </form>
-    <div style="font-size:11px;color:#9aa1ad;margin-top:12px;line-height:1.5">数据在浏览器本地用口令解密，服务端仅存储密文。浏览器密码管理器可记住本账户（下次自动填充）；勾选"记住本设备"则本机关闭后仍免输（明文存于本机，重装/清缓存失效）。忘记口令可在仓库重设 SITE_PASSWORD 后重新部署。</div>
+    <div style="font-size:11px;color:#9aa1ad;margin-top:12px;line-height:1.5">数据在浏览器本地用口令解密，服务端仅存储密文。浏览器密码管理器可记住本账户（下次自动填充，仍需点“进入”）；勾选"记住本设备"则本机关闭后自动填入口令（明文存于本机，仍需点“进入”，重装/清缓存失效）。每次打开均需显式解锁，不会静默登录。忘记口令可在仓库重设 SITE_PASSWORD 后重新部署。</div>
   </div>
 </div>
 
@@ -1220,8 +1220,8 @@ window.__indexBoot = boot;
     let ok = false;
     try { ok = await loadEncrypted(pass); } catch (e) { ok = false; }
     if (ok) {
-      try { sessionStorage.setItem('nv_pass', pass); } catch (e) {}
-      // 记住本设备（勾选才持久；未勾选则清除旧记录）
+      // 注意：不再写入 sessionStorage 做静默自动登录，每次刷新都需显式解锁
+      // 记住本设备（勾选才持久；未勾选则清除旧记录）—— 仅用于下次自动填入口令，仍需点“进入”
       try {
         const rm = document.getElementById('rememberMe');
         if (rm && rm.checked) localStorage.setItem('nv_remember', await sealLocal(pass));
@@ -1259,13 +1259,16 @@ window.__indexBoot = boot;
     }
     const box = document.getElementById('login');
     if (box) box.style.display = 'flex';
-    // 自动登录：先试本会话，再试本设备记住
-    let remembered = '';
-    try { remembered = sessionStorage.getItem('nv_pass') || ''; } catch (e) {}
-    if (!remembered) { try { remembered = (await openLocal()) || ''; } catch (e) {} }
-    if (remembered) {
-      if (await loadEncrypted(remembered)) { box.style.display = 'none'; runBoots(); return; }
-    }
+    // 安全：不做静默自动登录。仅当“记住本设备”时预填口令，仍需用户点“进入”显式解锁。
+    try {
+      const remembered = (await openLocal()) || '';
+      const inp = document.getElementById('pass');
+      if (remembered && inp) {
+        inp.value = remembered;
+        const rm = document.getElementById('rememberMe');
+        if (rm) rm.checked = true;
+      }
+    } catch (e) {}
     const inp = document.getElementById('pass');
     if (inp) inp.focus();
     const form = document.getElementById('loginForm');
