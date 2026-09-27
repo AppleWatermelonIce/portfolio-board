@@ -3,7 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>持仓净值曲线</title>
+<!-- build: login-robust-v2 2026-09-27 -->
 <style>
 :root{
   --bg:#f6f6f7; --card:#ffffff; --line:#e5e5e9; --line2:#f0f0f2;
@@ -1160,24 +1164,46 @@ window.__indexBoot = boot;
 <script>
 /* 解密启动器（方案A）：有 .enc 则要求口令解密；本地明文 data.js 已就绪则直接启动。 */
 (function () {
+  const $login = () => document.getElementById('login');
+  function setStatus(msg, isErr) {
+    const b = $login(); if (!b) return;
+    const el = b.querySelector('.lerr');
+    if (el) { el.textContent = msg || ''; el.style.color = isErr ? '#c0392b' : '#7a8290'; }
+  }
+  function setBusy(on) {
+    const btn = document.getElementById('loginGo');
+    if (btn) { btn.disabled = !!on; btn.textContent = on ? '校验中…' : '进入'; }
+  }
+  // 给任意 Promise 加超时，避免移动端“永久卡住”而无任何反馈
+  function withTimeout(promise, ms, label) {
+    return Promise.race([
+      promise,
+      new Promise((_, rej) => setTimeout(() => rej(new Error('TIMEOUT:' + label)), ms)),
+    ]);
+  }
   function runBoots() {
     if (window.__indexBoot) window.__indexBoot();
     if (window.__liveBoot) window.__liveBoot();
   }
   async function loadEncrypted(pass) {
-    const v = await (await fetch('vault.json', { cache: 'no-store' })).json();
-    const key = await window.AppCrypto.deriveKey(pass, v.salt, v.iter);
-    const r = await fetch('assets/data.js.enc', { cache: 'no-store' });
-    const b64 = await r.text();
+    if (!window.AppCrypto) throw new Error('NO_CRYPTO');
+    setStatus('读取校验信息…');
+    const vr = await withTimeout(fetch('vault.json', { cache: 'no-store' }), 15000, 'vault');
+    const v = await withTimeout(vr.json(), 10000, 'vault-json');
+    setStatus('派生密钥…');
+    const key = await withTimeout(window.AppCrypto.deriveKey(pass, v.salt, v.iter), 30000, 'kdf');
+    setStatus('下载加密数据…');
+    const r = await withTimeout(fetch('assets/data.js.enc', { cache: 'no-store' }), 30000, 'enc');
+    const b64 = await withTimeout(r.text(), 20000, 'enc-read');
+    setStatus('解密并载入…');
     let text;
-    try { text = await window.AppCrypto.decrypt(b64, key); }
-    catch (e) { return false; }
-    try { new Function(text)(); } catch (e) { return false; }
+    try { text = await withTimeout(window.AppCrypto.decrypt(b64, key), 30000, 'dec'); }
+    catch (e) {
+      if (String(e && e.message).indexOf('TIMEOUT:') === 0) throw e; // 基础设施超时
+      return false;                                                  // 口令错误（AES-GCM 完整性失败）
+    }
+    try { new Function(text)(); } catch (e) { throw new Error('EVAL:' + ((e && e.message) || e)); }
     return !!(window.PORTFOLIO_DATA && window.PORTFOLIO_DATA.products);
-  }
-  function showError(msg) {
-    const box = document.getElementById('login');
-    if (box) box.querySelector('.lerr').textContent = msg;
   }
   // —— 本设备记住：用本机随机设备密钥对口令做 AES-GCM 加密后存 localStorage ——
   // 安全边界：deviceKey 明文存于本机 localStorage；本设备其他用户或恶意脚本理论可读。
@@ -1212,35 +1238,62 @@ window.__indexBoot = boot;
       return new TextDecoder().decode(pt);
     } catch (e) { return null; }
   }
+  // 非关键的“记住本设备 / 密码管理器”动作：一律 fire-and-forget，绝不阻塞“进入”
+  function persistAsync(pass) {
+    try {
+      const rm = document.getElementById('rememberMe');
+      if (rm && rm.checked) {
+        sealLocal(pass).then(s => { try { localStorage.setItem('nv_remember', s); } catch (e) {} }).catch(() => {});
+      } else {
+        try { localStorage.removeItem('nv_remember'); } catch (e) {}
+      }
+    } catch (e) {}
+    try {
+      if (navigator.credentials && window.PasswordCredential) {
+        const form = document.getElementById('loginForm');
+        Promise.resolve(navigator.credentials.store(new PasswordCredential(form))).catch(() => {});
+      }
+    } catch (e) {}
+  }
   async function onSubmit() {
     const inp = document.getElementById('pass');
-    const pass = inp.value;
-    if (!pass) return;
-    showError('校验中…');
-    let ok = false;
-    try { ok = await loadEncrypted(pass); } catch (e) { ok = false; }
+    const pass = inp ? inp.value : '';
+    if (!pass) { setStatus('请输入口令', true); return; }
+    setBusy(true);
+    setStatus('校验中…');
+    let ok = false, err = null;
+    try { ok = await loadEncrypted(pass); } catch (e) { err = e; ok = false; }
     if (ok) {
-      // 注意：不再写入 sessionStorage 做静默自动登录，每次刷新都需显式解锁
-      // 记住本设备（勾选才持久；未勾选则清除旧记录）—— 仅用于下次自动填入口令，仍需点“进入”
-      try {
-        const rm = document.getElementById('rememberMe');
-        if (rm && rm.checked) localStorage.setItem('nv_remember', await sealLocal(pass));
-        else localStorage.removeItem('nv_remember');
-      } catch (e) {}
-      // 主动触发浏览器密码管理器保存（Chrome/Edge 支持；不支持则靠上方标准表单结构由浏览器自动提示）
-      try {
-        if (navigator.credentials && window.PasswordCredential) {
-          const form = document.getElementById('loginForm');
-          await navigator.credentials.store(new PasswordCredential(form));
+      // 1) 关键路径：先隐藏登录层（让浏览器先重绘），再执行较重的渲染。
+      //    必须在任何非关键 await 之前，避免“已解密却卡在校验中”。
+      setStatus('进入…');
+      const b = $login();
+      if (b) b.style.display = 'none';
+      setBusy(false);
+      setTimeout(() => {
+        try { runBoots(); }
+        catch (e) {
+          if (b) b.style.display = 'flex';
+          setStatus('数据已解密，但页面渲染出错：' + ((e && e.message) || e), true);
         }
-      } catch (e) {}
-      const box = document.getElementById('login');
-      if (box) box.style.display = 'none';
-      runBoots();
+      }, 30);
+      // 2) 非关键持久化（记住本设备 / 密码管理器），失败也不影响已经进入
+      persistAsync(pass);
+      return;
+    }
+    setBusy(false);
+    const m = (err && err.message) || '';
+    if (m.indexOf('TIMEOUT:') === 0) {
+      setStatus('解密超时（步骤：' + m.slice(8) + '）。请检查网络后重试；若仍不行，改用桌面浏览器打开。', true);
+    } else if (m === 'NO_CRYPTO') {
+      setStatus('此浏览器未开放加密接口（Web Crypto 不可用），无法解密。请用 https 打开并换用最新版 Chrome/Safari。', true);
+    } else if (m.indexOf('EVAL:') === 0) {
+      setStatus('数据解析失败（部署可能未完成），请稍后重试。', true);
+    } else if (m) {
+      setStatus('加载失败：' + m, true);
     } else {
-      showError('口令错误，请重试');
-      inp.value = '';
-      inp.focus();
+      setStatus('口令错误，请重试', true);
+      if (inp) { inp.value = ''; inp.focus(); }
     }
   }
   async function start() {
@@ -1257,8 +1310,12 @@ window.__indexBoot = boot;
       }
       return;
     }
-    const box = document.getElementById('login');
+    const box = $login();
     if (box) box.style.display = 'flex';
+    // 前置自检：Web Crypto 是否可用（iOS 上非 https / 受限环境会缺失）
+    if (!window.crypto || !window.crypto.subtle || !window.AppCrypto) {
+      setStatus('当前环境不支持 Web Crypto（需 https 且非受限模式），无法解密。', true);
+    }
     // 安全：不做静默自动登录。仅当“记住本设备”时预填口令，仍需用户点“进入”显式解锁。
     try {
       const remembered = (await openLocal()) || '';
@@ -1282,6 +1339,16 @@ window.__indexBoot = boot;
       pwInput.focus();
     });
   }
+  // 登录层可见期间，任何未捕获错误都直接显示，避免“无声卡住”
+  window.addEventListener('error', e => {
+    const b = $login();
+    if (b && b.style.display !== 'none' && e && e.message) setStatus('页面错误：' + e.message, true);
+  });
+  window.addEventListener('unhandledrejection', e => {
+    const b = $login();
+    if (b && b.style.display !== 'none' && e && e.reason)
+      setStatus('页面错误：' + ((e.reason && e.reason.message) || e.reason), true);
+  });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
 })();
