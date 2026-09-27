@@ -698,13 +698,29 @@ function cardHTML(p, i){
 }
 
 /* 实时价角标渲染：由 live.js 的 fetchRealtime 调用（含懒渲染卡片的缓存回放） */
+/* 把行情数据时间格式化为「短（角标内常显）」与「完整（悬浮 tooltip）」两种形态。
+   注意：这里用的是行情本身的「数据时间」（腾讯 f[30] / 基金 gztime），
+   不是本地抓取时间；移动端无 hover，故短时间在角标内常显。 */
+function fmtTs(ts){
+  if (!ts) return null;
+  const s = String(ts).replace(/\//g,'-');
+  const m = s.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (!m) return {short: s, full: s};
+  const [,Y,Mo,D,H,Min] = m;
+  const now = new Date();
+  const sameDay = now.getFullYear()==+Y && now.getMonth()+1==+Mo && now.getDate()==+D;
+  return {
+    short: sameDay ? `${H}:${Min}` : `${Mo}-${D} ${H}:${Min}`,
+    full:  `${Y}-${Mo}-${D} ${H}:${Min}`,
+  };
+}
 window.__rtPaint = function(id, info){
   const el = document.getElementById('rt-'+id);
   if (!el) return;
   if (!info || info.price == null || !isFinite(info.price)){
     el.className = 'rtb';
     el.innerHTML = '<span class="ph">实时 —</span>';
-    el.title = '该标的无浏览器端实时源（黄金/汇率）或暂未取得';
+    el.title = '该标的无浏览器端实时源（黄金/汇率），仅显示基座日线数据';
     return;
   }
   const c = info.chg > 0.00005 ? 'up' : (info.chg < -0.00005 ? 'down' : 'flat');
@@ -714,8 +730,11 @@ window.__rtPaint = function(id, info){
   const price = info.price.toLocaleString('zh-CN',
     {minimumFractionDigits:dp, maximumFractionDigits:dp});
   const tag = info.tag ? info.tag + ' ' : '';
-  el.innerHTML = tag + price + ' <b>' + arrow + ' ' + fmtPct(info.chg) + '</b>';
-  el.title = '实时参考' + (info.ts ? (' · ' + info.ts) : '') + '（不并入收益曲线）';
+  const t = info.ts ? fmtTs(info.ts) : null;
+  el.innerHTML = tag + price + ' <b>' + arrow + ' ' + fmtPct(info.chg) + '</b>'
+    + (t ? ' <span class="ph">' + t.short + '</span>' : '');
+  el.title = '实时参考价（不并入收益曲线）'
+    + (t ? (' · 数据时间 ' + t.full + '（北京时间）') : '');
 };
 
 function renderStats(p){
@@ -743,12 +762,18 @@ function renderStrip(list){
   const rows = list.map(p => ({p, m:metrics(p)})).filter(x=>x.m)
                    .sort((a,b)=>b.m.ret-a.m.ret);
   if (!rows.length){ $('#strip').innerHTML=''; return; }
-  const top = rows.slice(0,6), bot = rows.slice(-3).reverse();
+  // 前 6（表现最好）+ 后 3（表现最差）；同一标的绝不重复出现。
+  // 当有效标的数较少（如某小组 / 某区间）时首尾会重叠，必须按 id 去重，
+  // 否则会出现「同一个标的 -X%」在条里出现两次的情况。
+  const seen = new Set();
+  const pick = [];
+  for (const r of rows.slice(0, 6))            if (!seen.has(r.p.id)) { seen.add(r.p.id); pick.push(r); }
+  for (const r of rows.slice(-3).reverse())   if (!seen.has(r.p.id)) { seen.add(r.p.id); pick.push(r); }
   const card = r => `<div class="sc">
       <div class="n">${r.p.name}</div>
       <div class="v ${cls(r.m.ret*100)}">${fmtPct(r.m.ret*100)}</div>
     </div>`;
-  $('#strip').innerHTML = top.map(card).join('') + bot.map(card).join('');
+  $('#strip').innerHTML = pick.map(card).join('');
 }
 
 /* ============================================================ 对比图 */
