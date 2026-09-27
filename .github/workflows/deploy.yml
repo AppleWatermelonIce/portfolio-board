@@ -55,18 +55,6 @@ jobs:
       - name: 打包 valuation.js
         run: python scripts/build_valuation_js.py
 
-      - name: 提交更新
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if git diff --cached --quiet; then
-            echo "无变化，跳过提交"
-          else
-            git commit -m "自动更新 $(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M') [skip ci]"
-            git push
-          fi
-
       - name: 准备 Pages 产物
         run: |
           rm -rf public && mkdir -p public
@@ -90,6 +78,22 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: public
+
+      # 数据落库（增量入仓，供下次运行合并）。放在最后且 best-effort：
+      # 即便 git 推送因历史分叉/网络抖动失败，也不应阻断上面的加密部署。
+      - name: 提交更新（best-effort，失败不阻断加密部署）
+        continue-on-error: true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "无变化，跳过提交"
+          else
+            git commit -m "自动更新 $(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M') [skip ci]"
+            git pull --rebase origin master
+            git push
+          fi
 
   deploy:
     needs: update
