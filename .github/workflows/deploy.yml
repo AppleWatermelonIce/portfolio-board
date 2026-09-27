@@ -162,6 +162,24 @@ jobs:
           echo "::notice::ENCSRC 口令来源=$SRC 长度=${#PW}（内容不显示）"
           SITE_PASSWORD="$PW" node tools/encrypt_site.mjs public
 
+      - name: 列出工作流可见的密钥名（仅名字与数量，绝不显示值）
+        if: always()
+        continue-on-error: true
+        env:
+          SECRETS_JSON: ${{ toJSON(secrets) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          raw = os.environ.get('SECRETS_JSON') or '{}'
+          try:
+              d = json.loads(raw)
+          except Exception as e:
+              print('::warning::SECRETS_PROBE 解析失败（此上下文可能不支持枚举）:', e)
+          else:
+              names = sorted(d.keys())
+              print('::warning::SECRETS_PROBE count=%d names=%s' % (len(names), ','.join(names) if names else 'EMPTY'))
+          PY
+
       - name: 上传 Pages 产物
         uses: actions/upload-pages-artifact@v3
         with:
