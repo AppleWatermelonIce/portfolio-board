@@ -1136,15 +1136,24 @@ window.__indexBoot = boot;
   <div style="width:min(92vw,360px);background:#fff;color:#1c2230;border-radius:14px;padding:26px 24px;box-shadow:0 12px 40px rgba(0,0,0,.25)">
     <div class="ltitle" style="font-size:17px;font-weight:700;margin-bottom:4px">私人净值看板</div>
     <div class="lsub" style="font-size:12.5px;color:#7a8290;margin-bottom:18px">请输入访问口令以解密您的持仓数据</div>
-    <div style="position:relative">
-      <input id="pass" type="password" autocomplete="current-password" placeholder="访问口令"
-        style="width:100%;box-sizing:border-box;padding:11px 40px 11px 12px;border:1px solid #d7dce5;border-radius:9px;font-size:14px;outline:none" />
-      <button type="button" id="pwToggle" aria-label="显示或隐藏口令"
-        style="position:absolute;right:4px;top:50%;transform:translateY(-50%);border:0;background:transparent;cursor:pointer;font-size:15px;line-height:1;padding:6px;color:#7a8290">👁</button>
-    </div>
-    <div class="lerr" style="color:#c0392b;font-size:12px;min-height:16px;margin:8px 2px 12px"></div>
-    <button id="loginGo" style="width:100%;padding:11px;border:0;border-radius:9px;background:#2a6bd0;color:#fff;font-size:14px;font-weight:600;cursor:pointer">进入</button>
-    <div style="font-size:11px;color:#9aa1ad;margin-top:12px;line-height:1.5">数据在浏览器本地用口令解密，服务端仅存储密文。可用浏览器自带的密码管理器（钥匙串 / 1Password）记住口令，下次自动填充、无需手抄。忘记口令可在仓库重设 SITE_PASSWORD 后重新部署。</div>
+    <form id="loginForm" autocomplete="on" style="margin:0">
+      <label for="uid" style="display:block;font-size:12px;color:#7a8290;margin-bottom:4px">账户</label>
+      <input id="uid" name="username" type="text" autocomplete="username" value="我的净值看板"
+        style="width:100%;box-sizing:border-box;padding:9px 12px;margin-bottom:12px;border:1px solid #d7dce5;border-radius:9px;font-size:14px;outline:none" />
+      <label for="pass" style="display:block;font-size:12px;color:#7a8290;margin-bottom:4px">访问口令</label>
+      <div style="position:relative">
+        <input id="pass" name="password" type="password" autocomplete="current-password" placeholder="访问口令"
+          style="width:100%;box-sizing:border-box;padding:11px 40px 11px 12px;border:1px solid #d7dce5;border-radius:9px;font-size:14px;outline:none" />
+        <button type="button" id="pwToggle" aria-label="显示或隐藏口令"
+          style="position:absolute;right:4px;top:50%;transform:translateY(-50%);border:0;background:transparent;cursor:pointer;font-size:15px;line-height:1;padding:6px;color:#7a8290">👁</button>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;margin-top:12px;font-size:12px;color:#5b6472;cursor:pointer">
+        <input type="checkbox" id="rememberMe" /> 记住本设备（关闭浏览器后仍免输；明文存于本机）
+      </label>
+      <div class="lerr" style="color:#c0392b;font-size:12px;min-height:16px;margin:8px 2px 12px"></div>
+      <button type="submit" id="loginGo" style="width:100%;padding:11px;border:0;border-radius:9px;background:#2a6bd0;color:#fff;font-size:14px;font-weight:600;cursor:pointer">进入</button>
+    </form>
+    <div style="font-size:11px;color:#9aa1ad;margin-top:12px;line-height:1.5">数据在浏览器本地用口令解密，服务端仅存储密文。浏览器密码管理器可记住本账户（下次自动填充）；勾选"记住本设备"则本机关闭后仍免输（明文存于本机，重装/清缓存失效）。忘记口令可在仓库重设 SITE_PASSWORD 后重新部署。</div>
   </div>
 </div>
 
@@ -1170,6 +1179,39 @@ window.__indexBoot = boot;
     const box = document.getElementById('login');
     if (box) box.querySelector('.lerr').textContent = msg;
   }
+  // —— 本设备记住：用本机随机设备密钥对口令做 AES-GCM 加密后存 localStorage ——
+  // 安全边界：deviceKey 明文存于本机 localStorage；本设备其他用户或恶意脚本理论可读。
+  // 纯静态个人看板风险低；重装/清缓存即失效。
+  function getDeviceKey() {
+    let dk = localStorage.getItem('nv_dk');
+    if (!dk) {
+      const bytes = crypto.getRandomValues(new Uint8Array(32));
+      dk = btoa(String.fromCharCode.apply(null, bytes));
+      localStorage.setItem('nv_dk', dk);
+    }
+    return dk;
+  }
+  async function sealLocal(pass) {
+    const raw = Uint8Array.from(atob(getDeviceKey()), c => c.charCodeAt(0));
+    const key = await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(pass));
+    const merged = new Uint8Array(12 + ct.byteLength);
+    merged.set(iv, 0); merged.set(new Uint8Array(ct), 12);
+    return btoa(String.fromCharCode.apply(null, merged));
+  }
+  async function openLocal() {
+    const dk = localStorage.getItem('nv_dk');
+    const sealed = localStorage.getItem('nv_remember');
+    if (!dk || !sealed) return null;
+    try {
+      const raw = Uint8Array.from(atob(dk), c => c.charCodeAt(0));
+      const key = await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+      const buf = Uint8Array.from(atob(sealed), c => c.charCodeAt(0));
+      const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, key, buf.slice(12));
+      return new TextDecoder().decode(pt);
+    } catch (e) { return null; }
+  }
   async function onSubmit() {
     const inp = document.getElementById('pass');
     const pass = inp.value;
@@ -1179,6 +1221,19 @@ window.__indexBoot = boot;
     try { ok = await loadEncrypted(pass); } catch (e) { ok = false; }
     if (ok) {
       try { sessionStorage.setItem('nv_pass', pass); } catch (e) {}
+      // 记住本设备（勾选才持久；未勾选则清除旧记录）
+      try {
+        const rm = document.getElementById('rememberMe');
+        if (rm && rm.checked) localStorage.setItem('nv_remember', await sealLocal(pass));
+        else localStorage.removeItem('nv_remember');
+      } catch (e) {}
+      // 主动触发浏览器密码管理器保存（Chrome/Edge 支持；不支持则靠上方标准表单结构由浏览器自动提示）
+      try {
+        if (navigator.credentials && window.PasswordCredential) {
+          const form = document.getElementById('loginForm');
+          await navigator.credentials.store(new PasswordCredential(form));
+        }
+      } catch (e) {}
       const box = document.getElementById('login');
       if (box) box.style.display = 'none';
       runBoots();
@@ -1204,18 +1259,17 @@ window.__indexBoot = boot;
     }
     const box = document.getElementById('login');
     if (box) box.style.display = 'flex';
-    const inp = document.getElementById('pass');
+    // 自动登录：先试本会话，再试本设备记住
     let remembered = '';
     try { remembered = sessionStorage.getItem('nv_pass') || ''; } catch (e) {}
+    if (!remembered) { try { remembered = (await openLocal()) || ''; } catch (e) {} }
     if (remembered) {
       if (await loadEncrypted(remembered)) { box.style.display = 'none'; runBoots(); return; }
     }
-    if (inp) {
-      inp.focus();
-      inp.addEventListener('keydown', e => { if (e.key === 'Enter') onSubmit(); });
-    }
-    const btn = document.getElementById('loginGo');
-    if (btn) btn.onclick = onSubmit;
+    const inp = document.getElementById('pass');
+    if (inp) inp.focus();
+    const form = document.getElementById('loginForm');
+    if (form) form.addEventListener('submit', e => { e.preventDefault(); onSubmit(); });
     const pwToggle = document.getElementById('pwToggle');
     const pwInput = document.getElementById('pass');
     if (pwToggle && pwInput) pwToggle.addEventListener('click', () => {
