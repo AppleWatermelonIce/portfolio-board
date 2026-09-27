@@ -697,32 +697,34 @@ function cardHTML(p, i){
   </div>`;
 }
 
-/* 实时价角标渲染：由 live.js 的 fetchRealtime 调用（含懒渲染卡片的缓存回放） */
-/* 把行情数据时间格式化为「短（角标内常显）」与「完整（悬浮 tooltip）」两种形态。
-   注意：这里用的是行情本身的「数据时间」（腾讯 f[30] / 基金 gztime），
-   不是本地抓取时间；移动端无 hover，故短时间在角标内常显。 */
-function fmtTs(ts){
-  if (!ts) return null;
-  const s = String(ts).replace(/\//g,'-');
-  const m = s.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
-  if (!m) return {short: s, full: s};
-  const [,Y,Mo,D,H,Min] = m;
-  const now = new Date();
-  const sameDay = now.getFullYear()==+Y && now.getMonth()+1==+Mo && now.getDate()==+D;
-  return {
-    short: sameDay ? `${H}:${Min}` : `${Mo}-${D} ${H}:${Min}`,
-    full:  `${Y}-${Mo}-${D} ${H}:${Min}`,
-  };
+/* 实时价角标渲染：由 live.js 的 fetchRealtime 调用（含懒渲染卡片的缓存回放）。
+   数据时间为行情自身的「数据时间」(腾讯 f[30] / 基金 gztime)，非本地抓取时间。
+   规则：
+     - 页面常显只展示价格与涨跌，时间【不】显示在页面上；
+     - 时间仅通过悬浮(tooltip)展示，且精确到分钟；
+     - 无实时数据（黄金/汇率无浏览器源、基金取数失败、网络异常等）时【不显示角标】。 */
+function fmtDataTime(ts){
+  if (!ts) return '';
+  let s = String(ts).trim().replace(/\//g,'-');
+  // 腾讯 f[30] 形如 14 位数字 YYYYMMDDHHMMSS
+  let m = s.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})\d*$/);
+  if (m) return m[1]+'-'+m[2]+'-'+m[3]+' '+m[4]+':'+m[5];
+  // 带分隔符形如 2026-09-27 11:19(:30)
+  m = s.match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (m) return m[1]+'-'+m[2]+'-'+m[3]+' '+m[4]+':'+m[5];
+  return s;
 }
 window.__rtPaint = function(id, info){
   const el = document.getElementById('rt-'+id);
   if (!el) return;
+  // 无实时数据：隐藏角标，不显示占位
   if (!info || info.price == null || !isFinite(info.price)){
-    el.className = 'rtb';
-    el.innerHTML = '<span class="ph">实时 —</span>';
-    el.title = '该标的无浏览器端实时源（黄金/汇率），仅显示基座日线数据';
+    el.style.display = 'none';
+    el.innerHTML = '';
+    el.title = '';
     return;
   }
+  el.style.display = '';
   const c = info.chg > 0.00005 ? 'up' : (info.chg < -0.00005 ? 'down' : 'flat');
   el.className = 'rtb ' + c;
   const arrow = info.chg > 0.00005 ? '▲' : (info.chg < -0.00005 ? '▼' : '—');
@@ -730,11 +732,9 @@ window.__rtPaint = function(id, info){
   const price = info.price.toLocaleString('zh-CN',
     {minimumFractionDigits:dp, maximumFractionDigits:dp});
   const tag = info.tag ? info.tag + ' ' : '';
-  const t = info.ts ? fmtTs(info.ts) : null;
-  el.innerHTML = tag + price + ' <b>' + arrow + ' ' + fmtPct(info.chg) + '</b>'
-    + (t ? ' <span class="ph">' + t.short + '</span>' : '');
-  el.title = '实时参考价（不并入收益曲线）'
-    + (t ? (' · 数据时间 ' + t.full + '（北京时间）') : '');
+  el.innerHTML = tag + price + ' <b>' + arrow + ' ' + fmtPct(info.chg) + '</b>';
+  const dt = fmtDataTime(info.ts);
+  el.title = (tag.trim() ? (tag.trim() + ' · ') : '') + '数据时间 ' + (dt || '—') + '（北京时间，不并入收益曲线）';
 };
 
 function renderStats(p){
