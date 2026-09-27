@@ -42,13 +42,29 @@
     );
   }
 
-  // b64 = base64( IV(12字节) || 密文 )
+  // b64 = base64( IV(12字节) || 密文 )　—— 旧格式（兼容保留）
   async function decrypt(b64, key) {
     const buf = b64ToBytes(b64);
     const iv = buf.slice(0, 12);
     const ct = buf.slice(12);
     const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
     return dec.decode(pt);
+  }
+
+  // bytes = IV(12字节) || 密文　—— 紧凑格式（gz-bin-v1）的裸二进制解密
+  async function decryptBin(bytes, key) {
+    const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const iv = buf.subarray(0, 12);
+    const ct = buf.subarray(12);
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+    return new Uint8Array(pt);
+  }
+
+  // gzip 解压为文本（用浏览器原生 DecompressionStream：Chrome 80+/Safari 16.4+/Firefox 113+）
+  async function gunzipToText(bytes) {
+    if (typeof DecompressionStream === 'undefined') throw new Error('NO_GUNZIP');
+    const src = new Response(bytes).body.pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(src).text();
   }
 
   async function encrypt(text, key) {
@@ -60,5 +76,5 @@
     return bytesToB64(merged);
   }
 
-  window.AppCrypto = { deriveKey, decrypt, encrypt, _b64ToBytes: b64ToBytes, _bytesToB64: bytesToB64 };
+  window.AppCrypto = { deriveKey, decrypt, decryptBin, gunzipToText, encrypt, _b64ToBytes: b64ToBytes, _bytesToB64: bytesToB64 };
 })();

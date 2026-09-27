@@ -196,7 +196,12 @@ function rtCodeOf(p){
   if (p.src === 'fx')     return {mode:'fx'};
   if (p.src === 'fund')   return {mode:'fund', code: String(p.secid || p.code).padStart(6,'0')};
   const c = channelOf(p);
-  if (c.ch === 'tx') return {mode:'tx', code:c.id};
+  // 关键：实时角标走的是 <script src> JSONP，腾讯会把代码原样用作变量名——
+  // 带点的代码（如 us.INX）会返回 `v_us.INX="..."`，那是「对变量 v_us 取属性」→
+  // 抛 ReferenceError: v_us is not defined，且会中断整条脚本、连带同批其它代码全部拿不到值。
+  // 腾讯对无点写法（usINX / usNDX）返回完全相同的数据，故此处统一去掉点。
+  // 注意：日线路径（newfqkline，JSON 接口）不走这里，仍按原样使用 us.INX / us.NDX。
+  if (c.ch === 'tx') return {mode:'tx', code:String(c.id).replace(/\./g, '')};
   return {mode:'none'};
 }
 function parseTx(str){

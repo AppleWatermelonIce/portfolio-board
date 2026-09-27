@@ -7,7 +7,8 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>持仓净值曲线</title>
-<!-- build: login-robust-v2 2026-09-27 -->
+<link rel="icon" href="data:,">
+<!-- build: login-robust-v3-compact 2026-09-27 -->
 <style>
 :root{
   --bg:#f6f6f7; --card:#ffffff; --line:#e5e5e9; --line2:#f0f0f2;
@@ -1185,22 +1186,145 @@ window.__indexBoot = boot;
     if (window.__indexBoot) window.__indexBoot();
     if (window.__liveBoot) window.__liveBoot();
   }
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // —— 密文下载（紧凑格式 gz-bin-v1）——
+  // 设计：分片并行 + 逐片重试 + “无数据停滞”看门狗（弱网下连接可能建起来却极慢，
+  //       关键判据是「有没有新字节」而不是「总耗时」，避免把慢速下载误判为失败）+
+  //       Cache Storage 复用（第二次打开直接命中本地，不再走网络）。
+  const ENC_CACHE = 'nv-enc-v1';
+  const ENC_BASE = 'assets/data.js.enc.bin';
+  const STALL_MS = 25000;   // 25s 内一个字节都没收到 → 判定停滞，中断并重试
+  const CHUNK_TRIES = 3;    // 每片最多尝试 3 次
+  let dlTotal = 0, dlGot = 0;
+  function dlPaint() {
+    if (!dlTotal) { setStatus('下载加密数据…'); return; }
+    setStatus('下载加密数据… ' + Math.min(100, Math.round(dlGot * 100 / dlTotal)) + '%');
+  }
+  async function openCache() {
+    try { if (typeof caches === 'undefined' || !caches.open) return null; return await caches.open(ENC_CACHE); }
+    catch (e) { return null; }
+  }
+  // 取「一片」密文：返回 Uint8Array；停滞/网络错误都会抛出，交由上层重试
+  async function fetchPiece(url) {
+    const ac = new AbortController();
+    let watchdog = null, mine = 0;
+    const arm = () => { clearTimeout(watchdog); watchdog = setTimeout(() => { try { ac.abort(); } catch (e) {} }, STALL_MS); };
+    try {
+      arm();
+      const r = await fetch(url, { cache: 'no-store', signal: ac.signal });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      let out;
+      if (r.body && r.body.getReader) {
+        const rd = r.body.getReader(), buf = [];
+        for (;;) {
+          const it = await rd.read();
+          if (it.done) break;
+          arm();                                  // 收到字节 → 重置停滞计时
+          buf.push(it.value); mine += it.value.length; dlGot += it.value.length;
+          if (dlTotal) dlPaint();
+        }
+        out = new Uint8Array(mine);
+        let off = 0;
+        for (const c of buf) { out.set(c, off); off += c.length; }
+      } else {
+        out = new Uint8Array(await r.arrayBuffer());
+        mine += out.length; dlGot += out.length;
+        if (dlTotal) dlPaint();
+      }
+      return out;
+    } catch (e) {
+      dlGot -= mine;                             // 失败要把本片已计进度回滚，避免进度虚高
+      throw e;
+    } finally { clearTimeout(watchdog); }
+  }
+  async function fetchPieceRetry(url) {
+    let err = null;
+    for (let i = 0; i < CHUNK_TRIES; i++) {
+      try { return await fetchPiece(url); }
+      catch (e) {
+        err = e;
+        dlPaint();
+        if (i < CHUNK_TRIES - 1) await sleep(700 * (i + 1));
+      }
+    }
+    throw err || new Error('fetch failed');
+  }
+  async function loadPayload(v) {
+    const parts = Math.max(1, v.parts || 1);
+    const urls = [];
+    for (let i = 0; i < parts; i++) {
+      urls.push((parts > 1 ? ENC_BASE + '.' + i : ENC_BASE) + '?v=' + (v.sig || '1'));
+    }
+    dlTotal = v.bytes || 0; dlGot = 0; dlPaint();
+    const c = await openCache();
+    const segs = new Array(parts);
+    let idx = 0;
+    async function worker() {
+      for (;;) {
+        const i = idx++;
+        if (i >= parts) return;
+        if (c) {                                   // 先查本地密文缓存
+          try {
+            const hit = await c.match(urls[i]);
+            if (hit) {
+              const b = new Uint8Array(await hit.arrayBuffer());
+              segs[i] = b; dlGot += b.length; dlPaint();
+              continue;
+            }
+          } catch (e) {}
+        }
+        const b = await fetchPieceRetry(urls[i]);
+        segs[i] = b;
+        if (c) { try { await c.put(urls[i], new Response(b)); } catch (e) {} }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(parts, 3) }, worker));
+    let len = 0;
+    for (const s of segs) len += s.length;
+    if (v.bytes && len !== v.bytes) throw new Error('SIZE ' + len + '≠' + v.bytes);
+    const blob = new Uint8Array(len);
+    let off = 0;
+    for (const s of segs) { blob.set(s, off); off += s.length; }
+    if (c) {                                       // 清掉旧版次（sig 变了）的缓存片
+      try {
+        for (const req of await c.keys()) {
+          if (!urls.some(u => req.url.slice(-u.length) === u)) await c.delete(req);
+        }
+      } catch (e) {}
+    }
+    return blob;
+  }
   async function loadEncrypted(pass) {
-    if (!window.AppCrypto) throw new Error('NO_CRYPTO');
+    if (!window.AppCrypto || !window.AppCrypto.decryptBin || !window.AppCrypto.gunzipToText) throw new Error('NO_CRYPTO');
     setStatus('读取校验信息…');
     const vr = await withTimeout(fetch('vault.json', { cache: 'no-store' }), 15000, 'vault');
     const v = await withTimeout(vr.json(), 10000, 'vault-json');
     setStatus('派生密钥…');
     const key = await withTimeout(window.AppCrypto.deriveKey(pass, v.salt, v.iter), 30000, 'kdf');
-    setStatus('下载加密数据…');
-    const r = await withTimeout(fetch('assets/data.js.enc', { cache: 'no-store' }), 30000, 'enc');
-    const b64 = await withTimeout(r.text(), 20000, 'enc-read');
-    setStatus('解密并载入…');
     let text;
-    try { text = await withTimeout(window.AppCrypto.decrypt(b64, key), 30000, 'dec'); }
-    catch (e) {
-      if (String(e && e.message).indexOf('TIMEOUT:') === 0) throw e; // 基础设施超时
-      return false;                                                  // 口令错误（AES-GCM 完整性失败）
+    if (v.fmt === 'gz-bin-v1') {
+      // —— 紧凑格式：分片下载 → 裸二进制解密 → gzip 解压 ——
+      const blob = await loadPayload(v);
+      setStatus('解密并载入…');
+      let pt;
+      try { pt = await withTimeout(window.AppCrypto.decryptBin(blob, key), 30000, 'dec'); }
+      catch (e) {
+        if (String(e && e.message).indexOf('TIMEOUT:') === 0) throw e;
+        return false;                            // 口令错误（AES-GCM 完整性校验失败）
+      }
+      text = await withTimeout(window.AppCrypto.gunzipToText(pt), 30000, 'gunzip');
+    } else {
+      // —— 兼容旧部署：base64 单文件（约 2.95MB）——
+      setStatus('下载加密数据…');
+      const r = await withTimeout(fetch('assets/data.js.enc', { cache: 'no-store' }), 30000, 'enc');
+      const b64 = await withTimeout(r.text(), 90000, 'enc-read');
+      setStatus('解密并载入…');
+      try { text = await withTimeout(window.AppCrypto.decrypt(b64, key), 30000, 'dec'); }
+      catch (e) {
+        if (String(e && e.message).indexOf('TIMEOUT:') === 0) throw e;
+        return false;
+      }
     }
     try { new Function(text)(); } catch (e) { throw new Error('EVAL:' + ((e && e.message) || e)); }
     return !!(window.PORTFOLIO_DATA && window.PORTFOLIO_DATA.products);
@@ -1284,9 +1408,15 @@ window.__indexBoot = boot;
     setBusy(false);
     const m = (err && err.message) || '';
     if (m.indexOf('TIMEOUT:') === 0) {
-      setStatus('解密超时（步骤：' + m.slice(8) + '）。请检查网络后重试；若仍不行，改用桌面浏览器打开。', true);
+      setStatus('网络超时（步骤：' + m.slice(8) + '）。已自动重试仍失败，请再点一次「进入」或换 Wi-Fi 重试。', true);
     } else if (m === 'NO_CRYPTO') {
       setStatus('此浏览器未开放加密接口（Web Crypto 不可用），无法解密。请用 https 打开并换用最新版 Chrome/Safari。', true);
+    } else if (m === 'NO_GUNZIP') {
+      setStatus('此浏览器版本过旧（不支持解压接口）。请升级到 iOS 16.4+ / 最新版 Chrome，或改用桌面浏览器。', true);
+    } else if (m.indexOf('SIZE ') === 0) {
+      setStatus('加密数据下载不完整（' + m.slice(5) + '）。请检查网络后重试。', true);
+    } else if (m.indexOf('HTTP ') === 0) {
+      setStatus('加密数据下载失败（' + m + '）。若刚部署完请稍等片刻再试。', true);
     } else if (m.indexOf('EVAL:') === 0) {
       setStatus('数据解析失败（部署可能未完成），请稍后重试。', true);
     } else if (m) {
@@ -1299,8 +1429,15 @@ window.__indexBoot = boot;
   async function start() {
     // 本地开发：明文 data.js 经 <script> 已注入，免密直启
     if (window.PORTFOLIO_DATA && window.PORTFOLIO_DATA.products) { runBoots(); return; }
+    // 探测是否已生成加密数据：只读 128 字节的 vault.json（旧版这里会去拉 2.95MB 密文，纯属浪费）
     let hasEnc = false;
-    try { const r = await fetch('assets/data.js.enc', { cache: 'no-store' }); hasEnc = r.ok; } catch (e) {}
+    try {
+      const r = await fetch('vault.json', { cache: 'no-store' });
+      if (r.ok) { const v = await r.json(); hasEnc = !!v && !!v.salt; }
+    } catch (e) {}
+    if (!hasEnc) {
+      try { const r2 = await fetch('assets/data.js.enc', { method: 'HEAD', cache: 'no-store' }); hasEnc = r2.ok; } catch (e) {}
+    }
     if (!hasEnc) {
       const box = document.getElementById('login');
       if (box) {
