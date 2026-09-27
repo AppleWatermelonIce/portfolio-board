@@ -92,10 +92,24 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    # 口令密钥名：首选 SITE_PASSWORD；若仓库里实际叫别的名字（如误按账号名命名），此处作为兼容兜底。
-    # 兼容兜底只影响"读哪个名字"，不改变加密强度；建议尽快统一为 SITE_PASSWORD。
+    # 口令候选来源（多名称兼容）：加密步骤按顺序取第一个非空者。
+    # 首选 secrets.SITE_PASSWORD；其余为兼容兜底，用于兜住"仓库里实际用了别的名字"的情况。
+    # 注意：vars.* 是明文变量，若命中会显式告警（不安全，应改用 Secret）。
     env:
-      SITE_PASSWORD: ${{ secrets.SITE_PASSWORD || secrets.APPLWATERMELONICE }}
+      S_SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+      S_APPLWATERMELONICE: ${{ secrets.APPLWATERMELONICE }}
+      S_PASSWORD: ${{ secrets.PASSWORD }}
+      S_SITE_PASS: ${{ secrets.SITE_PASS }}
+      S_PASS: ${{ secrets.PASS }}
+      S_PWD: ${{ secrets.PWD }}
+      S_VAULT_PASSWORD: ${{ secrets.VAULT_PASSWORD }}
+      S_ACCESS_PASSWORD: ${{ secrets.ACCESS_PASSWORD }}
+      S_PASSWORD_SITE: ${{ secrets.PASSWORD_SITE }}
+      S_BOARD_PASSWORD: ${{ secrets.BOARD_PASSWORD }}
+      S_KEY: ${{ secrets.KEY }}
+      S_SECRET: ${{ secrets.SECRET }}
+      V_SITE_PASSWORD: ${{ vars.SITE_PASSWORD }}
+      V_APPLWATERMELONICE: ${{ vars.APPLWATERMELONICE }}
     steps:
       - name: Checkout（取加密脚本）
         uses: actions/checkout@v4
@@ -111,24 +125,42 @@ jobs:
         with:
           node-version: '20'
 
-      - name: 检查口令密钥是否注入（仅显示是否/长度，绝不显示内容）
-        env:
-          _PW_PRIMARY: ${{ secrets.SITE_PASSWORD }}
-          _PW_ALIAS: ${{ secrets.APPLWATERMELONICE }}
-          _PW_JOBENV: ${{ env.SITE_PASSWORD }}
+      - name: 口令来源探测（仅报告命中的名字与长度，绝不显示内容）
         run: |
-          echo "::warning::PWDIAG step_primary_len=${#_PW_PRIMARY} step_alias_len=${#_PW_ALIAS} jobenv_len=${#_PW_JOBENV}"
-          if [ -n "$_PW_PRIMARY" ]; then
-            echo "✅ SITE_PASSWORD 已注入（长度 ${#_PW_PRIMARY}）"
-          elif [ -n "$_PW_ALIAS" ]; then
-            echo "⚠️ 未找到名为 SITE_PASSWORD 的密钥，但检测到备用名 APPLWATERMELONICE 已注入（长度 ${#_PW_ALIAS}）→ 本次将使用备用名完成加密。"
-            echo "   建议尽快到 Settings → Secrets and variables → Actions 删除 APPLWATERMELONICE，新建名为 SITE_PASSWORD 的密钥（值不变）。"
-          else
-            echo "❌ 口令密钥未注入：请到 仓库 Settings → Secrets and variables → Actions → New repository secret，Name 必须一字不差为 SITE_PASSWORD（注意：不是 Environment secrets）"
-          fi
+          hits=""
+          add(){ if [ -n "$2" ]; then hits="$hits $1(len=${#2})"; fi; }
+          add secrets.SITE_PASSWORD     "$S_SITE_PASSWORD"
+          add secrets.APPLWATERMELONICE "$S_APPLWATERMELONICE"
+          add secrets.PASSWORD          "$S_PASSWORD"
+          add secrets.SITE_PASS         "$S_SITE_PASS"
+          add secrets.PASS              "$S_PASS"
+          add secrets.PWD               "$S_PWD"
+          add secrets.VAULT_PASSWORD    "$S_VAULT_PASSWORD"
+          add secrets.ACCESS_PASSWORD   "$S_ACCESS_PASSWORD"
+          add secrets.PASSWORD_SITE     "$S_PASSWORD_SITE"
+          add secrets.BOARD_PASSWORD    "$S_BOARD_PASSWORD"
+          add secrets.KEY               "$S_KEY"
+          add secrets.SECRET            "$S_SECRET"
+          add vars.SITE_PASSWORD        "$V_SITE_PASSWORD"
+          add vars.APPLWATERMELONICE    "$V_APPLWATERMELONICE"
+          echo "::warning::PWPROBE 命中:${hits:- NONE —— 本仓库 Actions 作用域下读不到任何口令}"
 
-      - name: 加密敏感数据（缺 SITE_PASSWORD 则报错，拒绝明文部署）
-        run: node tools/encrypt_site.mjs public
+      - name: 加密敏感数据（缺口令则报错，拒绝明文部署）
+        run: |
+          PW=""; SRC=""
+          for cand in S_SITE_PASSWORD S_APPLWATERMELONICE S_PASSWORD S_SITE_PASS S_PASS S_PWD S_VAULT_PASSWORD S_ACCESS_PASSWORD S_PASSWORD_SITE S_BOARD_PASSWORD S_KEY S_SECRET V_SITE_PASSWORD V_APPLWATERMELONICE; do
+            eval "val=\$$cand"
+            if [ -n "$val" ]; then PW="$val"; SRC="$cand"; break; fi
+          done
+          if [ -z "$PW" ]; then
+            echo "::error::ENC_NOPASS 未能从任何候选密钥名读到口令 → 拒绝以明文部署"
+            exit 1
+          fi
+          case "$SRC" in
+            V_*) echo "::warning::ENCSRC 口令来自 Actions 变量（$SRC），明文公开不安全，请改为 Secret";;
+          esac
+          echo "::notice::ENCSRC 口令来源=$SRC 长度=${#PW}（内容不显示）"
+          SITE_PASSWORD="$PW" node tools/encrypt_site.mjs public
 
       - name: 上传 Pages 产物
         uses: actions/upload-pages-artifact@v3
