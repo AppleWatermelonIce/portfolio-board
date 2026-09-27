@@ -16,8 +16,8 @@
 (function () {
 'use strict';
 
-if (!window.PORTFOLIO_DATA || !window.PORTFOLIO_DATA.products) return;
-const D = window.PORTFOLIO_DATA;
+// 数据由 index.html 解密启动器在口令校验后注入 window.PORTFOLIO_DATA，再调用 __liveBoot
+let D = null;
 
 const KEY        = 'nv_live_v1';
 const SCAN_GAP   = 6 * 3600 * 1000;   // 6 小时内不重复联网（一天打开多次只刷一次）
@@ -185,14 +185,16 @@ async function frRange(pair, sinceDate) {
 /* ------------------------------------------- ④ 实时价角标（仅展示，不并入收益率曲线）
    - A股/ETF/指数/港股/美股指数：腾讯 qt.gtimg.cn（<script src> JSONP，不受 CORS 限制）
    - 开放式基金：天天基金 fundgz（<script src>，日内估算净值 gsz + gszzl）；被 ASN 拦截时降级「—」
-   - 黄金(goldcny) / 汇率(fx)：浏览器端无实时源 → 角标显示「—」
+   - 黄金(goldcny)：GoldAPI 现货 XAU/USD（fetch，CORS=*，秒级，免 key）× 实时美兑人 → 折算 元/克（仅展示价，无涨跌）
+   - 汇率(fx)：open.er-api.com 美兑人（fetch，CORS=*，小时级，免 key）（仅展示价，无涨跌）
    颜色遵循 A股习惯：红涨绿跌。 */
 const RT = { data:{}, running:false };
 window.__rtData = RT.data;                 // 供 index.html 渲染卡片时回放缓存
 
 function rtCodeOf(p){
-  if (p.src === 'goldcny' || p.src === 'fx') return {mode:'none'};
-  if (p.src === 'fund') return {mode:'fund', code: String(p.secid || p.code).padStart(6,'0')};
+  if (p.src === 'goldcny') return {mode:'gold'};
+  if (p.src === 'fx')     return {mode:'fx'};
+  if (p.src === 'fund')   return {mode:'fund', code: String(p.secid || p.code).padStart(6,'0')};
   const c = channelOf(p);
   if (c.ch === 'tx') return {mode:'tx', code:c.id};
   return {mode:'none'};
@@ -253,6 +255,56 @@ function inTradingNow(){
   const hm = t.getUTCHours()*60 + t.getUTCMinutes();
   return (hm >= 570 && hm <= 690) || (hm >= 780 && hm <= 900);   // 09:30–11:30 / 13:00–15:00
 }
+
+/* ------------------------------------- ④b 商品/汇率 实时（fetch, CORS=*，免 key） */
+const TROY_OZ_G = 31.1034768;          // 1 金衡盎司 = 克
+/** USD→CNY 汇率（小时级） */
+async function fetchFxRate(){
+  const r = await fetch('https://open.er-api.com/v6/latest/USD', {cache:'no-store'});
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const j = await r.json();
+  if (!j || j.result !== 'success' || !j.rates || !(j.rates.CNY > 0)) throw new Error('无 CNY 汇率');
+  const ts = bjStamp(j.time_last_update_unix ? j.time_last_update_unix * 1000 : Date.now());
+  return { cny: +j.rates.CNY, ts };
+}
+/** XAU/USD 现货（秒级） */
+async function fetchGoldUsd(){
+  const r = await fetch('https://api.gold-api.com/price/XAU', {cache:'no-store'});
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const j = await r.json();
+  if (!j || !(j.price > 0)) throw new Error('无金价');
+  const ts = bjStamp(j.updatedAt ? Date.parse(j.updatedAt) : Date.now());
+  return { price: +j.price, ts };
+}
+/** 商品/汇率实时角标：黄金=现货XAU×美兑人折算元/克；汇率=美兑人。源不提供前收，故无涨跌。 */
+async function fetchSpotRealtime(){
+  const fxList   = D.products.filter(p => p.src === 'fx');
+  const goldList = D.products.filter(p => p.src === 'goldcny');
+  if (!fxList.length && !goldList.length) return;
+  let fx = null;
+  try { fx = await fetchFxRate(); } catch (e) { fx = null; }
+  for (const p of fxList){
+    const info = fx ? {price: fx.cny, chg: null, dp: 4, tag: '汇', ts: fx.ts} : null;
+    RT.data[p.id] = info;
+    if (window.__rtPaint) window.__rtPaint(p.id, info);
+  }
+  if (goldList.length){
+    let rate = fx ? fx.cny : null;
+    if (rate == null){ try { rate = (await fetchFxRate()).cny; } catch (e) { rate = null; } }
+    try {
+      const g = await fetchGoldUsd();
+      if (rate != null){
+        const cnyPerGram = g.price * rate / TROY_OZ_G;
+        const info = {price: cnyPerGram, chg: null, dp: 2, tag: '现', ts: g.ts};
+        for (const p of goldList){ RT.data[p.id] = info; if (window.__rtPaint) window.__rtPaint(p.id, info); }
+      } else {
+        for (const p of goldList){ RT.data[p.id] = null; if (window.__rtPaint) window.__rtPaint(p.id, null); }
+      }
+    } catch (e) {
+      for (const p of goldList){ RT.data[p.id] = null; if (window.__rtPaint) window.__rtPaint(p.id, null); }
+    }
+  }
+}
 async function fetchRealtime(){
   if (RT.running) return;
   RT.running = true;
@@ -282,6 +334,7 @@ async function fetchRealtime(){
       RT.data[p.id] = info || null;
       if (window.__rtPaint) window.__rtPaint(p.id, info);
     });
+    await fetchSpotRealtime();              // 商品/汇率：24h×工作日，随时刷新
   } catch(e){ /* 实时角标失败不影响主曲线 */ }
   finally { RT.running = false; }
 }
@@ -487,7 +540,9 @@ function shouldScan(rec) {
 }
 
 /* ------------------------------------------------------------------ 启动 */
-(function boot() {
+function boot() {
+  D = window.PORTFOLIO_DATA;
+  if (!D || !D.products) return;
   const btn = $('#btnRefresh');
   if (btn) btn.onclick = () => refresh(true);
 
@@ -510,11 +565,14 @@ function shouldScan(rec) {
   if (shouldScan(rec)) setTimeout(() => refresh(false), 500);
   setInterval(() => { if (shouldScan(loadRec())) refresh(false); }, 30 * 60 * 1000);
 
-  // 实时价角标：打开即拉一次；开盘时段每 30s 刷新（非交易时段只显示最近一次报价）
+  // 实时价角标：打开即拉一次；每 30s 刷新（A股/基金仅交易时段有意义，商品/汇率为 24h×工作日随时刷）
+  const hasSpot = D.products.some(p => p.src === 'goldcny' || p.src === 'fx');
   fetchRealtime();
   setInterval(() => {
-    if (inTradingNow() && !running && navigator.onLine !== false && !document.hidden) fetchRealtime();
+    if (running || navigator.onLine === false || document.hidden) return;
+    if (inTradingNow() || hasSpot) fetchRealtime();
   }, 30000);
-})();
+}
+window.__liveBoot = boot;
 
 })();

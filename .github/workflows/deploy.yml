@@ -76,6 +76,16 @@ jobs:
           cp -r data public/
           touch public/.nojekyll
 
+      - name: 设置 Node.js（加密脚本用）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 加密敏感数据（缺 SITE_PASSWORD 则报错，拒绝明文部署）
+        env:
+          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+        run: node tools/encrypt_site.mjs public
+
       - name: 上传 Pages 产物
         uses: actions/upload-pages-artifact@v3
         with:

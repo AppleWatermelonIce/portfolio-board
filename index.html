@@ -247,6 +247,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-si
 <script src="./assets/vendor/chart.umd.min.js"></script>
 <script src="./assets/data.js"></script>
 <script src="./assets/valuation.js"></script>
+<script src="./assets/crypto.js"></script>
 <script>
 /* ============================================================ 常量与工具 */
 const RANGES = [
@@ -264,7 +265,7 @@ const PALETTE=['#2a6bd0','#d0382f','#12a05c','#e0a800','#8250c4','#0f8fa8','#e27
 const LS = {hidden:'nv_hidden_v1', since:'nv_since_v1', range:'nv_range_v1'};
 
 const $ = s => document.querySelector(s);
-const fmtPct = v => (v>=0?'+':'') + v.toFixed(2) + '%';
+const fmtPct = v => (v==null || isNaN(v)) ? '' : (v>=0?'+':'') + v.toFixed(2) + '%';
 const cls  = v => v>0.00005?'up':(v<-0.00005?'down':'flat');
 const parseDate = s => { const [y,m,d]=s.split('-').map(Number); return new Date(y,m-1,d); };
 const shift = (dt, months) => new Date(dt.getFullYear(), dt.getMonth()+months, dt.getDate());
@@ -297,7 +298,7 @@ function lttb(xs, ys, thr){
 }
 
 /* ============================================================ 状态 */
-const DATA = window.PORTFOLIO_DATA || null;
+let DATA = null;   // 由解密启动器注入 window.PORTFOLIO_DATA 后，在 boot() 内赋值
 let state = {
   range: localStorage.getItem(LS.range) || 'y1',
   group: '全部',
@@ -698,11 +699,13 @@ function cardHTML(p, i){
 }
 
 /* 实时价角标渲染：由 live.js 的 fetchRealtime 调用（含懒渲染卡片的缓存回放）。
-   数据时间为行情自身的「数据时间」(腾讯 f[30] / 基金 gztime)，非本地抓取时间。
+   数据时间为行情自身的「数据时间」(腾讯 f[30] / 基金 gztime / GoldAPI updatedAt / er-api)，非本地抓取时间。
    规则：
-     - 页面常显只展示价格与涨跌，时间【不】显示在页面上；
+     - 页面常显只展示价格(与涨跌，若有)，时间【不】显示在页面上；
      - 时间仅通过悬浮(tooltip)展示，且精确到分钟；
-     - 无实时数据（黄金/汇率无浏览器源、基金取数失败、网络异常等）时【不显示角标】。 */
+     - 无实时数据（取数失败、网络异常等）时【不显示角标】；
+     - 黄金/汇率为浏览器端 fetch(CORS=*) 实时：黄金=GoldAPI 现货XAU×美兑人折算元/克，汇率=er-api 美兑人；
+       这两类源不提供「较前收」涨跌，故只显示实时价、不画箭头/百分比。 */
 function fmtDataTime(ts){
   if (!ts) return '';
   let s = String(ts).trim().replace(/\//g,'-');
@@ -725,14 +728,15 @@ window.__rtPaint = function(id, info){
     return;
   }
   el.style.display = '';
-  const c = info.chg > 0.00005 ? 'up' : (info.chg < -0.00005 ? 'down' : 'flat');
+  const hasChg = (info.chg != null && isFinite(info.chg));
+  const c = !hasChg ? 'flat' : (info.chg > 0.00005 ? 'up' : (info.chg < -0.00005 ? 'down' : 'flat'));
   el.className = 'rtb ' + c;
-  const arrow = info.chg > 0.00005 ? '▲' : (info.chg < -0.00005 ? '▼' : '—');
+  const arrow = !hasChg ? '' : (info.chg > 0.00005 ? '▲' : (info.chg < -0.00005 ? '▼' : '—'));
   const dp = info.dp || 2;
   const price = info.price.toLocaleString('zh-CN',
     {minimumFractionDigits:dp, maximumFractionDigits:dp});
   const tag = info.tag ? info.tag + ' ' : '';
-  el.innerHTML = tag + price + ' <b>' + arrow + ' ' + fmtPct(info.chg) + '</b>';
+  el.innerHTML = tag + price + (hasChg ? ' <b>' + arrow + ' ' + fmtPct(info.chg) + '</b>' : '');
   const dt = fmtDataTime(info.ts);
   el.title = (tag.trim() ? (tag.trim() + ' · ') : '') + '数据时间 ' + (dt || '—') + '（北京时间，不并入收益曲线）';
 };
@@ -1080,7 +1084,8 @@ function toast(msg){
 }
 
 /* ============================================================ 启动 */
-(function boot(){
+function boot(){
+  DATA = window.PORTFOLIO_DATA || null;
   if (!DATA || !DATA.products || !DATA.products.length){
     $('#grid').innerHTML = `<div class="empty" style="padding:70px 20px;line-height:2">
       <div style="font-size:15px;color:var(--text);margin-bottom:8px">尚未载入数据</div>
@@ -1121,8 +1126,96 @@ function toast(msg){
     clearTimeout(window.__rz);
     window.__rz = setTimeout(()=>{ if(!state.compare) location.reload(); }, 260);
   });
-})();
+}
+window.__indexBoot = boot;
 </script>
 <script src="./assets/live.js"></script>
+
+<!-- 口令登录层（方案A）：有 .enc 密文时才出现；本地明文 data.js 已就绪则免密直启 -->
+<div id="login" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(18,22,31,.62);backdrop-filter:blur(4px);align-items:center;justify-content:center;font-family:system-ui,'PingFang SC','Microsoft YaHei',sans-serif">
+  <div style="width:min(92vw,360px);background:#fff;color:#1c2230;border-radius:14px;padding:26px 24px;box-shadow:0 12px 40px rgba(0,0,0,.25)">
+    <div class="ltitle" style="font-size:17px;font-weight:700;margin-bottom:4px">私人净值看板</div>
+    <div class="lsub" style="font-size:12.5px;color:#7a8290;margin-bottom:18px">请输入访问口令以解密您的持仓数据</div>
+    <input id="pass" type="password" autocomplete="current-password" placeholder="访问口令"
+      style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #d7dce5;border-radius:9px;font-size:14px;outline:none" />
+    <div class="lerr" style="color:#c0392b;font-size:12px;min-height:16px;margin:8px 2px 12px"></div>
+    <button id="loginGo" style="width:100%;padding:11px;border:0;border-radius:9px;background:#2a6bd0;color:#fff;font-size:14px;font-weight:600;cursor:pointer">进入</button>
+    <div style="font-size:11px;color:#9aa1ad;margin-top:12px;line-height:1.5">数据在浏览器本地用口令解密，服务端仅存储密文。忘记口令可在仓库重设 SITE_PASSWORD 后重新部署。</div>
+  </div>
+</div>
+
+<script>
+/* 解密启动器（方案A）：有 .enc 则要求口令解密；本地明文 data.js 已就绪则直接启动。 */
+(function () {
+  function runBoots() {
+    if (window.__indexBoot) window.__indexBoot();
+    if (window.__liveBoot) window.__liveBoot();
+  }
+  async function loadEncrypted(pass) {
+    const v = await (await fetch('vault.json', { cache: 'no-store' })).json();
+    const key = await window.AppCrypto.deriveKey(pass, v.salt, v.iter);
+    const r = await fetch('assets/data.js.enc', { cache: 'no-store' });
+    const b64 = await r.text();
+    let text;
+    try { text = await window.AppCrypto.decrypt(b64, key); }
+    catch (e) { return false; }
+    try { new Function(text)(); } catch (e) { return false; }
+    return !!(window.PORTFOLIO_DATA && window.PORTFOLIO_DATA.products);
+  }
+  function showError(msg) {
+    const box = document.getElementById('login');
+    if (box) box.querySelector('.lerr').textContent = msg;
+  }
+  async function onSubmit() {
+    const inp = document.getElementById('pass');
+    const pass = inp.value;
+    if (!pass) return;
+    showError('校验中…');
+    let ok = false;
+    try { ok = await loadEncrypted(pass); } catch (e) { ok = false; }
+    if (ok) {
+      try { sessionStorage.setItem('nv_pass', pass); } catch (e) {}
+      const box = document.getElementById('login');
+      if (box) box.style.display = 'none';
+      runBoots();
+    } else {
+      showError('口令错误，请重试');
+      inp.value = '';
+      inp.focus();
+    }
+  }
+  async function start() {
+    // 本地开发：明文 data.js 经 <script> 已注入，免密直启
+    if (window.PORTFOLIO_DATA && window.PORTFOLIO_DATA.products) { runBoots(); return; }
+    let hasEnc = false;
+    try { const r = await fetch('assets/data.js.enc', { cache: 'no-store' }); hasEnc = r.ok; } catch (e) {}
+    if (!hasEnc) {
+      const box = document.getElementById('login');
+      if (box) {
+        box.style.display = 'flex';
+        box.querySelector('.ltitle').textContent = '尚未生成数据';
+        box.querySelector('.lsub').textContent = '请先运行 python update_data.py';
+      }
+      return;
+    }
+    const box = document.getElementById('login');
+    if (box) box.style.display = 'flex';
+    const inp = document.getElementById('pass');
+    let remembered = '';
+    try { remembered = sessionStorage.getItem('nv_pass') || ''; } catch (e) {}
+    if (remembered) {
+      if (await loadEncrypted(remembered)) { box.style.display = 'none'; runBoots(); return; }
+    }
+    if (inp) {
+      inp.focus();
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') onSubmit(); });
+    }
+    const btn = document.getElementById('loginGo');
+    if (btn) btn.onclick = onSubmit;
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+})();
+</script>
 </body>
 </html>
