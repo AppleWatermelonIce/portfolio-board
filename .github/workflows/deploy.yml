@@ -110,6 +110,9 @@ jobs:
       S_SECRET: ${{ secrets.SECRET }}
       V_SITE_PASSWORD: ${{ vars.SITE_PASSWORD }}
       V_APPLWATERMELONICE: ${{ vars.APPLWATERMELONICE }}
+      # 自检：GITHUB_TOKEN 是 Actions 内置且必然存在的密钥，其长度可证明 secrets 通道本身是否正常
+      S_SELFTEST: ${{ secrets.GITHUB_TOKEN }}
+      S_SELFTEST2: ${{ github.run_id }}
     steps:
       - name: Checkout（取加密脚本）
         uses: actions/checkout@v4
@@ -143,7 +146,10 @@ jobs:
           add secrets.SECRET            "$S_SECRET"
           add vars.SITE_PASSWORD        "$V_SITE_PASSWORD"
           add vars.APPLWATERMELONICE    "$V_APPLWATERMELONICE"
+          add D_selftest.GITHUB_TOKEN   "$S_SELFTEST"
+          add D_selftest.RUNNER_OS_OK   "$S_SELFTEST2"
           echo "::warning::PWPROBE 命中:${hits:- NONE —— 本仓库 Actions 作用域下读不到任何口令}"
+          echo "::warning::PWPROBE 自检说明：若上一条只命中 D_selftest.GITHUB_TOKEN，则说明密钥读取通道正常、只是仓库内确实没有名为上述候选的密钥。"
 
       - name: 加密敏感数据（缺口令则报错，拒绝明文部署）
         run: |
@@ -161,24 +167,6 @@ jobs:
           esac
           echo "::notice::ENCSRC 口令来源=$SRC 长度=${#PW}（内容不显示）"
           SITE_PASSWORD="$PW" node tools/encrypt_site.mjs public
-
-      - name: 列出工作流可见的密钥名（仅名字与数量，绝不显示值）
-        if: always()
-        continue-on-error: true
-        env:
-          SECRETS_JSON: ${{ toJSON(secrets) }}
-        run: |
-          python3 - <<'PY'
-          import json, os
-          raw = os.environ.get('SECRETS_JSON') or '{}'
-          try:
-              d = json.loads(raw)
-          except Exception as e:
-              print('::warning::SECRETS_PROBE 解析失败（此上下文可能不支持枚举）:', e)
-          else:
-              names = sorted(d.keys())
-              print('::warning::SECRETS_PROBE count=%d names=%s' % (len(names), ','.join(names) if names else 'EMPTY'))
-          PY
 
       - name: 上传 Pages 产物
         uses: actions/upload-pages-artifact@v3
