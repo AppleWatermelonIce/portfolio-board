@@ -19,7 +19,11 @@ import { join, basename } from 'node:path';
 const ROOT = process.argv[2] || 'public';
 const PASS = process.env.SITE_PASSWORD;
 if (!PASS) {
-  console.error('❌ 未设置 SITE_PASSWORD：拒绝以明文部署。请在仓库 Settings → Secrets 添加 SITE_PASSWORD 后重试。');
+  console.error('❌ 未设置 SITE_PASSWORD：拒绝以明文部署。');
+  console.error('   请到 仓库 Settings → Secrets and variables → Actions → "New repository secret"');
+  console.error('   （注意：必须是「Repository secrets」仓库级密钥，而非「Environments」环境级密钥；');
+  console.error('    加密步骤所在的 update 作业未声明 environment，无法读取环境级密钥。）');
+  console.error('   密钥名必须一字不差为 SITE_PASSWORD。设置后重跑 workflows 即可。');
   process.exit(1);
 }
 
