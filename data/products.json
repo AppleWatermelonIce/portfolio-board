@@ -41,8 +41,8 @@
     {"id": "006328", "name": "易方达中概互联ETF联接(QDII)C", "code": "006328", "group": "QDII基金", "src": "fund", "secid": "006328", "unit": "元"},
     {"id": "025787", "name": "大成港股恒信混合(QDII)",       "code": "025787", "group": "QDII基金", "src": "fund", "secid": "025787", "unit": "元"},
 
-    {"id": "518880", "name": "黄金（人民币）", "code": "518880.SH", "group": "商品/汇率", "src": "em", "secid": "1.518880", "unit": "元",
-     "note": "以黄金ETF华安(518880)净值代理，跟踪上金所Au99.99人民币现货"},
+    {"id": "GOLDCNY", "name": "黄金（人民币/克）", "code": "GC=F×USDCNY", "group": "商品/汇率", "src": "goldcny", "secid": "GC=F", "unit": "元/克",
+     "note": "COMEX黄金(美元/盎司)×美元兑人民币汇率，折算人民币元/克，非基金价格"},
     {"id": "USDCNH", "name": "美元/人民币",   "code": "USDCNY",    "group": "商品/汇率", "src": "fx", "secid": "USD-CNY", "unit": "CNY",
      "chan": "fr",
      "note": "欧洲央行每日参考汇率（Frankfurter API），浏览器端可直接增量更新"}

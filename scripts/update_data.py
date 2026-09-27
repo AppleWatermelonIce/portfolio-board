@@ -336,6 +336,45 @@ def fetch_yahoo(symbol, years=25):
     return dates, vals
 
 
+# ---------------------------------------------------------------- 人民币金价（COMEX × 汇率）
+def fetch_gold_cny(p, need_full, since):
+    """人民币金价（元/克）= COMEX 黄金(GC=F, 美元/盎司) × 美元兑人民币 ÷ 31.1034768
+
+        · GC=F 走雅虎（与 fetch_yahoo 同口径，无需 key）
+        · USD-CNY 走 Frankfurter(ECB)，与汇率标的同源
+        · 两条通道均免费、无 CORS 限制，适合 Actions 每日重抓
+        · 浏览器端 live.js 无雅虎通道（CORS），故该标的仅由每日批处理刷新，不强制在线补全
+        返回 (dates, vals)，vals 单位为 元/克。"""
+    if need_full or not since:
+        gd, gv = fetch_yahoo("GC=F", years=25)
+    else:
+        yrs = max(3, int((datetime.now(CN) - datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=CN)).days / 365) + 1)
+        gd, gv = fetch_yahoo("GC=F", years=yrs)
+    cd, cv = fetch_frankfurter("USD-CNY", need_full, since)
+    cny = {d: v for d, v in zip(cd, cv)}
+
+    from datetime import timedelta
+    def asdate(s):
+        return datetime.strptime(s, "%Y-%m-%d")
+
+    out_d, out_v = [], []
+    for d, g in zip(gd, gv):
+        if not g or g <= 0:
+            continue
+        rate = None
+        for back in range(0, 8):                      # 回退至多 7 个日历日找最近一个汇率日
+            dd = (asdate(d) - timedelta(days=back)).strftime("%Y-%m-%d")
+            if dd in cny:
+                rate = cny[dd]
+                break
+        if rate and rate > 0:
+            out_v.append(round(g * rate / 31.1034768, 4))
+            out_d.append(d)
+    if not out_d:
+        raise RuntimeError("黄金折算无可用数据（GC=F 或 USD-CNY 缺失）")
+    return out_d, out_v
+
+
 # ---------------------------------------------------------------- 基金复权净值
 def parse_unit_money(unit_money):
     """
@@ -480,6 +519,9 @@ def update_one(p, full):
     if p["src"] == "fund":
         dates, vals, warn = fetch_fund_nav(p["secid"])
         channel = "天天基金"
+    elif p["src"] == "goldcny":
+        dates, vals = fetch_gold_cny(p, need_full, beg_since)
+        channel = "雅虎×ECB"
     else:
         (dates, vals), channel = fetch_series(p, need_full, beg_since)
 
@@ -518,7 +560,7 @@ def write_payload(prods, plist, tag="", degraded=None):
         "tz": "Asia/Shanghai",
         "source": "东方财富 push2his / 天天基金 pingzhongdata / 腾讯 / 新浪 / 雅虎",
         "note": ("股票·ETF为后复权收盘价；基金为红利再投资复权净值（含分红与份额折算）；"
-                 "黄金以黄金ETF华安(518880)代理上金所Au99.99人民币现货；汇率为欧洲央行每日参考汇率"),
+                 "黄金为COMEX黄金(美元/盎司)×美元兑人民币汇率折算的人民币元/克；汇率为欧洲央行每日参考汇率"),
         "products": plist,
     }
     if degraded:

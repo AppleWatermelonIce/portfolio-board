@@ -64,6 +64,7 @@ async function pool(items, n, fn) {
 
 /* ------------------------------------------------------------ 通道解析 */
 function channelOf(p) {
+  if (p.src === 'goldcny') return { ch: 'skip' };   // 人民币金价由每日批处理（雅虎×ECB）刷新，浏览器端无雅虎 CORS
   if (p.src === 'fund') return { ch: 'pz', id: String(p.secid || p.code).padStart(6, '0') };
   if (p.id === 'SPX')    return { ch: 'tx', id: 'us.INX', fq: '' };
   if (p.id === 'NDX100') return { ch: 'tx', id: 'us.NDX', fq: '' };
@@ -305,6 +306,9 @@ async function refresh(force) {
   const errs = [];
   let done = 0, touched = 0;
   const total = plan.length;
+  // 浏览器端无法在线补全的标的（如人民币金价走雅虎，受 CORS 限制）直接跳过，不计入未完成
+  const skipList = plan.filter(x => !x.c.ch || x.c.ch === 'skip');
+  done = skipList.length;
   const tick = () => setStat(`⟳ 更新中 ${done}/${total}`, 'busy');
 
   try {
