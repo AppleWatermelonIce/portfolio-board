@@ -107,6 +107,16 @@ jobs:
         with:
           node-version: '20'
 
+      - name: 检查口令密钥是否注入（仅显示是否/长度，绝不显示内容）
+        env:
+          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+        run: |
+          if [ -n "$SITE_PASSWORD" ]; then
+            echo "SITE_PASSWORD 已注入（长度 ${#SITE_PASSWORD}）"
+          else
+            echo "SITE_PASSWORD 未注入：请到 仓库 Settings → Secrets and variables → Actions → New repository secret，Name 必须一字不差为 SITE_PASSWORD"
+          fi
+
       - name: 加密敏感数据（缺 SITE_PASSWORD 则报错，拒绝明文部署）
         env:
           SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
