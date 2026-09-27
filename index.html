@@ -1136,11 +1136,15 @@ window.__indexBoot = boot;
   <div style="width:min(92vw,360px);background:#fff;color:#1c2230;border-radius:14px;padding:26px 24px;box-shadow:0 12px 40px rgba(0,0,0,.25)">
     <div class="ltitle" style="font-size:17px;font-weight:700;margin-bottom:4px">私人净值看板</div>
     <div class="lsub" style="font-size:12.5px;color:#7a8290;margin-bottom:18px">请输入访问口令以解密您的持仓数据</div>
-    <input id="pass" type="password" autocomplete="current-password" placeholder="访问口令"
-      style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #d7dce5;border-radius:9px;font-size:14px;outline:none" />
+    <div style="position:relative">
+      <input id="pass" type="password" autocomplete="current-password" placeholder="访问口令"
+        style="width:100%;box-sizing:border-box;padding:11px 40px 11px 12px;border:1px solid #d7dce5;border-radius:9px;font-size:14px;outline:none" />
+      <button type="button" id="pwToggle" aria-label="显示或隐藏口令"
+        style="position:absolute;right:4px;top:50%;transform:translateY(-50%);border:0;background:transparent;cursor:pointer;font-size:15px;line-height:1;padding:6px;color:#7a8290">👁</button>
+    </div>
     <div class="lerr" style="color:#c0392b;font-size:12px;min-height:16px;margin:8px 2px 12px"></div>
     <button id="loginGo" style="width:100%;padding:11px;border:0;border-radius:9px;background:#2a6bd0;color:#fff;font-size:14px;font-weight:600;cursor:pointer">进入</button>
-    <div style="font-size:11px;color:#9aa1ad;margin-top:12px;line-height:1.5">数据在浏览器本地用口令解密，服务端仅存储密文。忘记口令可在仓库重设 SITE_PASSWORD 后重新部署。</div>
+    <div style="font-size:11px;color:#9aa1ad;margin-top:12px;line-height:1.5">数据在浏览器本地用口令解密，服务端仅存储密文。可用浏览器自带的密码管理器（钥匙串 / 1Password）记住口令，下次自动填充、无需手抄。忘记口令可在仓库重设 SITE_PASSWORD 后重新部署。</div>
   </div>
 </div>
 
@@ -1212,6 +1216,14 @@ window.__indexBoot = boot;
     }
     const btn = document.getElementById('loginGo');
     if (btn) btn.onclick = onSubmit;
+    const pwToggle = document.getElementById('pwToggle');
+    const pwInput = document.getElementById('pass');
+    if (pwToggle && pwInput) pwToggle.addEventListener('click', () => {
+      const show = pwInput.type === 'password';
+      pwInput.type = show ? 'text' : 'password';
+      pwToggle.textContent = show ? '🙈' : '👁';
+      pwInput.focus();
+    });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
