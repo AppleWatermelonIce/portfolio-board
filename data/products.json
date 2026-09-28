@@ -19,6 +19,8 @@
     {"id": "00700",  "name": "腾讯控股", "code": "00700.HK",  "group": "港股个股", "src": "em", "secid": "116.00700", "unit": "HKD"},
 
     {"id": "SH000510", "name": "中证A500",  "code": "000510.SH", "group": "指数", "src": "em", "secid": "1.000510", "unit": "点"},
+    {"id": "022485",   "name": "国金中证A500指数增强A", "code": "022485", "group": "指数", "src": "fund", "secid": "022485", "unit": "元",
+     "note": "A类份额；2024-11-18 成立，跟踪中证A500并做增强"},
     {"id": "SH000300", "name": "沪深300",   "code": "000300.SH", "group": "指数", "src": "em", "secid": "1.000300", "unit": "点"},
     {"id": "SPX",      "name": "标普500",   "code": "SPX",       "group": "指数", "src": "sina", "secid": ".INX",      "unit": "点",
      "chan": "sina",  "chan2": "auto", "secid2": "100.SPX"},
