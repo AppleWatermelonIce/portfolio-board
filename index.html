@@ -137,6 +137,7 @@ input:focus,select:focus{border-color:var(--accent)}
 .vlegend{display:flex;align-items:center;gap:9px;font-size:11px;color:var(--muted2);flex-wrap:wrap}
 .vlegend i{width:15px;height:9px;border-radius:2px;display:inline-block;vertical-align:-1px;margin-right:3px}
 .vnote{font-size:11.5px;color:var(--muted2)}
+.vquad{display:flex;flex-wrap:wrap;gap:3px 20px;margin-top:5px;font-size:11.5px;color:var(--muted2)}
 
 /* ---------- 实时价角标（仅展示，不并入收益率曲线） ---------- */
 .rtb{display:inline-flex;align-items:center;font-size:12px;font-weight:600;padding:2px 8px;border-radius:7px;
@@ -235,6 +236,8 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-si
       <div class="spacer"></div>
       <span class="vnote" id="valNote"></span>
     </div>
+    <!-- PB/PE 四象限解读（位于「分位样本 …」说明行下方） -->
+    <div class="vquad" id="valQuad"></div>
   </div>
 
   <div class="strip" id="strip"></div>
@@ -486,11 +489,22 @@ function renderValBadge(p){
       >${k} ${v.toFixed(2)} · ${Math.round(pct*100)}% ${b.name}</span>`;
 }
 
-/* 工具栏：估值开关 + 5 档图例 */
+/* 工具栏：估值开关 + 5 档图例 + PB/PE 四象限解读 */
+/* 图例里同时给出 PB 与 PE 两个口径，四象限即二者的组合解读（静态文案，紧跟在说明行下方） */
+const VQUAD = [
+  'PB低 + PE低 → 双低价值',
+  'PB低 + PE高 → 困境反转',
+  'PB高 + PE低 → 优质成长',
+  'PB高 + PE高 → 高预期区',
+];
 function renderValBar(){
   const row = $('#valRow');
-  if (!VDATA || !VDATA.items || !Object.keys(VDATA.items).length){ row.style.display = 'none'; return; }
+  if (!VDATA || !VDATA.items || !Object.keys(VDATA.items).length){
+    row.style.display = 'none'; $('#valQuad').style.display = 'none'; return;
+  }
   row.style.display = '';
+  $('#valQuad').style.display = '';
+  $('#valQuad').innerHTML = VQUAD.map(t => `<span>${t}</span>`).join('');
   $('#valTabs').innerHTML = [['off','关'],['pe','PE'],['pb','PB']].map(([v,t]) =>
     `<button class="tab${state.valKind===v?' on':''}" data-v="${v}">${t}</button>`).join('');
   $('#valTabs').querySelectorAll('.tab').forEach(b => b.onclick = () => {
@@ -729,12 +743,13 @@ function valOverlay(p, labels){
   return {vs, vband: band};
 }
 /* 卡片下方图例里的估值项：固定【同时】展示 PB 与 PE 两个口径的当前分位与所处档位
-   （色标 = 该档位颜色，与图上底色同源）。不依赖当前选的是 PE 还是 PB。 */
+   （色标 = 该档位颜色，与图上底色同源）。不依赖当前选的是 PE 还是 PB。
+   顺序：PE 在前、PB 在后；「当前」只写一次（两个口径共用）；两项之间不加分隔符（靠 flex gap 留白）。 */
 function valLegendHTML(p){
   const it = valItem(p);
   if (!it) return '';
   const out = [];
-  for (const kind of ['pb', 'pe']){
+  for (const kind of ['pe', 'pb']){
     if (!it[kind] || !it[kind].length) continue;
     const pre = vprep(it, kind, state.valWin);
     const v = pre.v[pre.v.length-1], pct = vpct(pre, v);
@@ -743,9 +758,9 @@ function valLegendHTML(p){
     const tv = vthresh(pre).map(t => t.toFixed(2)).join(' / ');
     out.push(`<span title="近 ${pre.win} 年样本 ${kind.toUpperCase()} 的 15/35/70/85 分位阈值 = ${tv}">`
       + `<i style="background:${b ? b.color : '#c9c9d0'};width:9px;height:9px;border-radius:2px"></i>`
-      + `当前 ${kind.toUpperCase()} 分位 <b>${Math.round(pct*100)}%</b>（${b ? b.name : '—'}）</span>`);
+      + `${out.length ? '' : '当前 '}${kind.toUpperCase()} 分位 <b>${Math.round(pct*100)}%</b>（${b ? b.name : '—'}）</span>`);
   }
-  return out.join('<span style="color:var(--muted2)">·</span>');
+  return out.join('');
 }
 
 function drawChart(canvas, p){
@@ -1182,26 +1197,28 @@ function zoom(p){
     const vs = valSeries(p, L.x);
     const base = {name:p.name, data:L.y.map(y=>+y.toFixed(3)), raw:s.v, color:UP, fill:!vs, seg:true};
     if (vs) Object.assign(base, vs);
-    const vband = vs ? valBandFor(vs.vpre, vs.vval) : null;
+    // ⚠ 局部变量不能叫 vband：会遮蔽全局 vband() 函数，导致下面算档位时抛
+    //   "vband is not a function"，整个统计行（含 PE/PB 分位）都渲染不出来。
+    const vbandCfg = vs ? valBandFor(vs.vpre, vs.vval) : null;
     charts.set(cv, new Chart(cv.getContext('2d'),
-      chartConfig(null, L.x, [base], {valBand: vband})));
+      chartConfig(null, L.x, [base], {valBand: vbandCfg})));
     let vline = '';
     if (state.valKind !== 'off'){
-      // 同样同时给出 PB 与 PE 的当前分位（与卡片下方图例口径一致）
+      // 与卡片下方图例同口径：PE 在前、PB 在后，「当前」只写一次，项间不用「·」
       const segs = [];
-      for (const kind of ['pb', 'pe']){
+      for (const kind of ['pe', 'pb']){
         const pre = valPre(p, kind);
         if (!pre || !pre.d.length) continue;
         const vv = pre.v[pre.v.length-1], pp = vpct(pre, vv), bb = vband(pp);
         if (vv == null || pp == null) continue;
         const tv = vthresh(pre).map(t => t.toFixed(2)).join(' / ');
         segs.push(`<span title="近 ${pre.win} 年样本 ${kind.toUpperCase()} 的 15/35/70/85 分位阈值 = ${tv}">`
-          + `当前 <b>${kind.toUpperCase()}</b> 分位 <b>${(pp*100).toFixed(1)}%</b>`
+          + `${segs.length ? '' : '当前 '}${kind.toUpperCase()} 分位 <b>${(pp*100).toFixed(1)}%</b>`
           + ` <span class="vb" style="background:${bb ? bb.color : '#c9c9d0'}">${bb ? bb.name : '—'}</span></span>`);
       }
       if (segs.length){
         const p0 = valPre(p, 'pb') || valPre(p, 'pe');
-        vline = '<br>' + segs.join('<span style="color:var(--muted2)"> · </span>')
+        vline = '<br>' + segs.join('&nbsp;&nbsp;')
           + `<span style="color:var(--muted2)">（${p0.win} 年窗口 ${p0.nWin} 个交易日 ·
             ${p0.from} ~ ${p0.to}${p0.short ? '，实际不足 ' + p0.win + ' 年' : ''}）</span>`;
       }
@@ -1214,11 +1231,20 @@ function zoom(p){
 }
 
 /* ============================================================ 管理标的 + 增删 */
+/* products.json 的完整字段集：导出时必须原样带出。
+   ⚠ 这里是字段清单的第 3 份拷贝（另两份是 scripts/update_data.py 的 meta_of() 与 write_payload 的 plist）。
+   漏字段的后果：导出覆盖回脚本目录后，观察仓槽位(slot)分段、配对合图(pair)、
+   溢价率(prem)、降级链(chan/chan2/secid2)、收益率标的(kind) 会全部静默失效——本文件曾因此丢过 pair/prem。
+   【新增标的字段时，本清单与 update_data.py::meta_of() 都要补。】 */
+const PRODUCT_KEYS = ['id','name','code','group','src','secid','unit','note',
+                      'slot','chan','chan2','secid2','pair','prem','kind'];
 function rebuildProductsJSON(){
-  const arr = DATA.products.map(p => ({
-    id:p.id, name:p.name, code:p.code, group:p.group, src:p.src, secid:p.secid,
-    unit:p.unit || '', ...(p.note ? {note:p.note} : {})
-  }));
+  const arr = DATA.products.map(p => {
+    const o = {};
+    for (const k of PRODUCT_KEYS)
+      if (p[k] !== undefined && p[k] !== '' && p[k] !== false) o[k] = p[k];
+    return o;
+  });
   return {products: arr};
 }
 
