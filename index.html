@@ -137,7 +137,8 @@ input:focus,select:focus{border-color:var(--accent)}
 .vlegend{display:flex;align-items:center;gap:9px;font-size:11px;color:var(--muted2);flex-wrap:wrap}
 .vlegend i{width:15px;height:9px;border-radius:2px;display:inline-block;vertical-align:-1px;margin-right:3px}
 .vnote{font-size:11.5px;color:var(--muted2)}
-.vquad{display:flex;flex-wrap:wrap;gap:3px 20px;margin-top:5px;font-size:11.5px;color:var(--muted2)}
+/* 四象限解读：四条对照，两列排布（窄屏已在下方媒体查询里退回单列） */
+.vquad{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 26px;margin-top:5px;font-size:11.5px;color:var(--muted2)}
 
 /* ---------- 实时价角标（仅展示，不并入收益率曲线） ---------- */
 .rtb{display:inline-flex;align-items:center;font-size:12px;font-weight:600;padding:2px 8px;border-radius:7px;
@@ -188,6 +189,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-si
   header{padding:16px 0 8px}
   h1{font-size:18px}
   .tips{font-size:11.5px}
+  .vquad{grid-template-columns:1fr}
 }
 </style>
 </head>
@@ -200,7 +202,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-si
       口径：股票/ETF 为<b>后复权收盘价</b>；开放式基金为<b>红利再投资复权净值</b>（含分红与份额折算）；黄金为<b>COMEX 黄金 × 美元兑人民币</b>折算的人民币元/克；汇率为美元兑人民币。
       <span style="color:var(--up)">红涨</span> / <span style="color:var(--down)">绿跌</span>（A股习惯）。<br>
       <b>打开网页即自动补齐最新数据</b>：同一天内多次打开只更新一次；右侧按钮可手动强刷。全历史基座由 <code>update_data.py</code> 生成。
-      卡片右上角「<b>盘</b>」为实时盘中参考价（股票/ETF/指数/港股/美股，红涨绿跌）、「<b>估</b>」为基金盘中估算净值，<b>仅供查看、不并入收益曲线</b>；黄金/汇率暂无浏览器实时源，显示「—」。
+      卡片右上角「<b>盘</b>」为实时盘中参考价（股票/ETF/指数/港股/美股，用行情源自带涨跌幅）、「<b>现</b>」为现货黄金、「<b>汇</b>」为美元兑人民币实时汇率，<b>仅供查看、不并入收益曲线</b>；商品/汇率因数据源不提供前收，其红绿＝角标价相对卡片「<b>最新</b>」价的偏离（<span style="color:var(--up)">高于为红</span>、<span style="color:var(--down)">低于为绿</span>）。场外基金无盘中实时价，故不显示角标。
     </div>
   </header>
 
@@ -468,34 +470,40 @@ function valBandFor(pre, vval){
   return (pct == null) ? null : {pct: pct};
 }
 
-/* 卡片标题栏的分位徽章 */
+/* 卡片标题旁的估值徽章：固定【同时】展示 PE 与 PB 两个口径的当前值与所处档位
+   （不依赖工具栏当前选的是 PE 还是 PB；关闭估值时两个徽章一起隐藏）。
+   顺序 PE 在前、PB 在后。图下方不再重复这两个数（原先的 valLegendHTML 已移除）。 */
 function renderValBadge(p){
   const el = document.getElementById('vb-' + p.id);
   if (!el) return;
   if (state.valKind === 'off' || !VDATA){ el.innerHTML = ''; return; }
-  const pre = valPre(p, state.valKind);
-  if (!pre || !pre.d.length){ el.innerHTML = ''; return; }
-  const k = state.valKind.toUpperCase();
-  const v = pre.v[pre.v.length - 1];
-  const pct = vpct(pre, v), b = vband(pct);
-  if (v == null || pct == null || !b){ el.innerHTML = ''; return; }
-  const span = pre.short
-    ? `实际样本仅 ${pre.spanYears.toFixed(1)} 年（${pre.from} 起，不足 ${pre.win} 年）`
-    : `近 ${pre.win} 年样本 ${pre.nWin} 个交易日（${pre.from} ~ ${pre.to}）`;
   const src = (VDATA.srcByItem || {})[p.id] || '';
   const srcCn = {danjuan:'蛋卷', miaoxiang:'妙想', 'csindex+roe':'中证+自算'}[src] || src || '—';
-  el.innerHTML = `<span class="vb" style="background:${b.color}"
-      title="${k} ${v.toFixed(2)}，${pre.win} 年样本内分位 ${(pct*100).toFixed(1)}% · ${span} · 数据源 ${srcCn}"
-      >${k} ${v.toFixed(2)} · ${Math.round(pct*100)}% ${b.name}</span>`;
+  const out = [];
+  for (const kind of ['pe', 'pb']){
+    const pre = valPre(p, kind);
+    if (!pre || !pre.d.length) continue;
+    const v = pre.v[pre.v.length - 1];
+    const pct = vpct(pre, v), b = vband(pct);
+    if (v == null || pct == null || !b) continue;
+    const k = kind.toUpperCase();
+    const span = pre.short
+      ? `实际样本仅 ${pre.spanYears.toFixed(1)} 年（${pre.from} 起，不足 ${pre.win} 年）`
+      : `近 ${pre.win} 年样本 ${pre.nWin} 个交易日（${pre.from} ~ ${pre.to}）`;
+    out.push(`<span class="vb" style="background:${b.color}"
+        title="${k} ${v.toFixed(2)}，样本内分位 ${(pct*100).toFixed(1)}% · ${span} · 数据源 ${srcCn}"
+        >${k} ${v.toFixed(2)} · ${Math.round(pct*100)}% ${b.name}</span>`);
+  }
+  el.innerHTML = out.join('');
 }
 
-/* 工具栏：估值开关 + 5 档图例 + PB/PE 四象限解读 */
-/* 图例里同时给出 PB 与 PE 两个口径，四象限即二者的组合解读（静态文案，紧跟在说明行下方） */
+/* 工具栏：估值开关 + 5 档图例 + PE/PB 四象限解读 */
+/* 徽章里同时给出 PE 与 PB 两个口径，四象限即二者的组合解读（静态文案，紧跟在说明行下方） */
 const VQUAD = [
-  'PB低 + PE低 → 双低价值',
-  'PB低 + PE高 → 困境反转',
-  'PB高 + PE低 → 优质成长',
-  'PB高 + PE高 → 高预期区',
+  'PE低 + PB低 → 利润便宜 + 资产便宜 → 优先关注',
+  'PE低 + PB高 → 利润便宜 + 资产偏贵 → 重点看ROE是否可持续',
+  'PE高 + PB低 → 利润偏贵 + 资产便宜 → 观察是否处于盈利低谷/等待反转',
+  'PE高 + PB高 → 利润贵 + 资产贵 → 谨慎，等待估值回落',
 ];
 function renderValBar(){
   const row = $('#valRow');
@@ -742,27 +750,6 @@ function valOverlay(p, labels){
   if (!band) return null;
   return {vs, vband: band};
 }
-/* 卡片下方图例里的估值项：固定【同时】展示 PB 与 PE 两个口径的当前分位与所处档位
-   （色标 = 该档位颜色，与图上底色同源）。不依赖当前选的是 PE 还是 PB。
-   顺序：PE 在前、PB 在后；「当前」只写一次（两个口径共用）；两项之间不加分隔符（靠 flex gap 留白）。 */
-function valLegendHTML(p){
-  const it = valItem(p);
-  if (!it) return '';
-  const out = [];
-  for (const kind of ['pe', 'pb']){
-    if (!it[kind] || !it[kind].length) continue;
-    const pre = vprep(it, kind, state.valWin);
-    const v = pre.v[pre.v.length-1], pct = vpct(pre, v);
-    if (v == null || pct == null) continue;
-    const b = vband(pct);
-    const tv = vthresh(pre).map(t => t.toFixed(2)).join(' / ');
-    out.push(`<span title="近 ${pre.win} 年样本 ${kind.toUpperCase()} 的 15/35/70/85 分位阈值 = ${tv}">`
-      + `<i style="background:${b ? b.color : '#c9c9d0'};width:9px;height:9px;border-radius:2px"></i>`
-      + `${out.length ? '' : '当前 '}${kind.toUpperCase()} 分位 <b>${Math.round(pct*100)}%</b>（${b ? b.name : '—'}）</span>`);
-  }
-  return out.join('');
-}
-
 function drawChart(canvas, p){
   if (charts.has(canvas)) { charts.get(canvas).destroy(); charts.delete(canvas); }
   if (p.kind === 'yield') return drawYieldChart(canvas, p);
@@ -787,12 +774,9 @@ function drawChart(canvas, p){
   const ch = new Chart(canvas.getContext('2d'),
     chartConfig(null, L.x, series, {valBand: vo ? vo.vband : null}));
   charts.set(canvas, ch);
+  // 图下方不再重复估值分位（已移到卡片标题旁的 PE/PB 徽章），单序列卡因此没有图例可写。
   const lg = document.getElementById('lg-'+p.id);
-  if (lg){
-    const vlg = (state.valKind === 'off') ? '' : valLegendHTML(p);
-    if (vlg){ lg.style.display=''; lg.innerHTML = vlg; }
-    else lg.style.display='none';
-  }
+  if (lg){ lg.style.display='none'; lg.innerHTML=''; }
 }
 
 /* 组合图：基准标的与其配对子标的（如 中证A500 + 国金中证A500指数增强A）画在同一张图，
@@ -831,12 +815,12 @@ function drawChartPair(canvas, base, atts){
   }
   charts.set(canvas, new Chart(canvas.getContext('2d'),
     chartConfig(null, labels, ds, {valBand: vo ? vo.vband : null})));
+  // 图下方只留系列图例（标的名 + 颜色）；估值分位已移到卡片标题旁的 PE/PB 徽章。
   const lg = document.getElementById('lg-'+base.id);
   if (lg){
     lg.style.display='';
     lg.innerHTML = series.map((s,i) =>
-      `<span><i style="background:${s.color}"></i>${s.name}${i===0?'（基准）':''}</span>`).join('')
-      + ((state.valKind === 'off') ? '' : valLegendHTML(base));
+      `<span><i style="background:${s.color}"></i>${s.name}${i===0?'（基准）':''}</span>`).join('');
   }
 }
 
@@ -918,13 +902,17 @@ function cardHTML(p, i){
 }
 
 /* 实时价角标渲染：由 live.js 的 fetchRealtime 调用（含懒渲染卡片的缓存回放）。
-   数据时间为行情自身的「数据时间」(腾讯 f[30] / 基金 gztime / GoldAPI updatedAt / er-api)，非本地抓取时间。
+   【角标的语义】＝盘中实时价：场内证券＝行情快照最新成交价（tag 盘），
+   黄金＝现货 XAU×实时汇率折算（tag 现），汇率＝ECB 参考汇率（tag 汇）。
+   与统计行的「最新」（最近收盘价）刻意区分：收盘后二者相等，盘中不同。
+   数据时间为行情自身的「数据时间」(腾讯 f[30] / GoldAPI updatedAt / er-api)，非本地抓取时间，
+   并按【数据源所在地时区】标注：A股/场内ETF→北京时间、港股→香港时间、美股→纽约时间、
+   黄金→纽约时间、汇率→中欧时间（腾讯对美股返回的本就是美东时间，不能再标"北京时间"）。
    规则：
      - 页面常显只展示价格(与涨跌，若有)，时间【不】显示在页面上；
      - 时间仅通过悬浮(tooltip)展示，且精确到分钟；
-     - 无实时数据（取数失败、网络异常等）时【不显示角标】；
-     - 黄金/汇率为浏览器端 fetch(CORS=*) 实时：黄金=GoldAPI 现货XAU×美兑人折算元/克，汇率=er-api 美兑人；
-       这两类源不提供「较前收」涨跌，故只显示实时价、不画箭头/百分比。 */
+     - 无实时数据（取数失败、网络异常、场外基金无实时价等）时【不显示角标】；
+     - 黄金/汇率的源不提供「较前收」涨跌，故只显示实时价、不画箭头/百分比。 */
 function fmtDataTime(ts){
   if (!ts) return '';
   let s = String(ts).trim().replace(/\//g,'-');
@@ -936,7 +924,93 @@ function fmtDataTime(ts){
   if (m) return m[1]+'-'+m[2]+'-'+m[3]+' '+m[4]+':'+m[5];
   return s;
 }
+/* ============================================ 市场与交易时段（判断「盘中 / 已收盘」）
+   「最新」用的是【收盘价】，不是实时价：盘中显示最近一个已收盘交易日的收盘价，
+   收盘后显示当日收盘价。故需要知道「此刻该市场是否还在盘中」——时区与时段按市场定，
+   夏令时交给 Intl 处理，无需硬编码偏移。 */
+const MKSEG = {
+  cn: { tz:'Asia/Shanghai',    name:'北京时间', seg:[[570,690],[780,900]] },  // A股/场内基金ETF：09:30-11:30、13:00-15:00
+  hk: { tz:'Asia/Hong_Kong',   name:'香港时间', seg:[[570,720],[780,960]] },  // 港股：09:30-12:00、13:00-16:00
+  us: { tz:'America/New_York', name:'纽约时间', seg:[[570,960]] },            // 美股：09:30-16:00
+};
+function marketOf(p){
+  if (p.id === 'SPX' || p.id === 'NDX100') return 'us';
+  const m = String(p.secid || '').match(/^(\d+)\./);
+  if (!m) return null;                       // 场外基金/港售基金/商品汇率：不按盘中取价
+  if (m[1] === '116') return 'hk';
+  if (m[1] === '0' || m[1] === '1') return 'cn';
+  return null;
+}
+function inSessionNow(mk){
+  const cfg = MKSEG[mk]; if (!cfg) return false;
+  let o;
+  try{
+    const fmt = new Intl.DateTimeFormat('en-US', { timeZone: cfg.tz, hour12: false,
+      weekday: 'short', hour: '2-digit', minute: '2-digit' });
+    o = {}; for (const x of fmt.formatToParts(new Date())) o[x.type] = x.value;
+  }catch(e){ return false; }
+  if (o.weekday === 'Sat' || o.weekday === 'Sun') return false;
+  const hm = (parseInt(o.hour, 10) % 24) * 60 + parseInt(o.minute, 10);
+  return cfg.seg.some(s => hm >= s[0] && hm < s[1]);
+}
+/* ==================================================== 「最新」块的唯一出口
+   【全站统一策略】「最新」= 最近一个【已收盘】交易日的收盘价，**不取盘中实时价**；
+   右上角角标才是盘中实时价。二者收盘后自然相等、盘中刻意不同（这正是主人要的语义）。
+   产物 `v` 是各品种的【收益计算口径】，不等于市价，故不能直接拿来当「最新」：
+     · A股/港股/场内基金/ETF：产物为【后复权】序列（美的集团 395.91 vs 实际 82.00）；
+     · 场外基金：产物为【红利再投资复权净值】（006670 1.2958 vs 单位净值 1.1286）；
+     · 黄金/汇率：产物与浏览器实时源本就不是同一源头
+       （COMEX 期货×ECB 日频汇率 vs 现货 XAU×er-api 实时），差 0.1%~0.9%。
+   取价规则：
+     场内证券（A股/港股/场内ETF/指数）→ 腾讯快照：盘中取【前收 f[4]】、收盘后取【现价 f[3]】
+       （收盘后 f[3] 即当日收盘价；盘中 f[3] 是实时价，不能当收盘价用）；
+       涨跌：盘中用产物单日涨跌（对应的正是前收那一天），收盘后用快照自带涨跌幅。
+     商品/汇率、场外基金、港售基金 → 产物末值（日频收盘口径，本就没有"盘中收盘价"）。
+
+   —— 各品种的角标来源（分类策略，与 live.js 的 rtCodeOf 一一对应）——
+     场内证券（A股个股/港股/场内基金ETF/指数）  腾讯行情快照（tag 盘）；基金/ETF 3 位小数
+     商品/汇率（src=goldcny/fx）                现货 XAU×实时汇率 / er-api（tag 现/汇）
+     场外基金（src=fund）                       无（天天基金 fundgz 已失效，且不再请求）
+     港售基金（src=yahoo）                      无浏览器端实时源 → 产物口径
+     债券收益率（kind=yield）                    走 renderYieldStats，不经过本函数 */
+const RTLAST = {};        // 卡片当前 metrics 缓存，供实时数据到达后重算「最新」块
+function latestHTML(p, m){
+  const info = (window.__rtData || {})[p.id];
+  const unitTxt = (p.unit && p.unit !== '点' && p.unit !== 'CNY') ? ' ' + p.unit : '';
+  const mk = marketOf(p);
+  if (mk && info && info.price != null && isFinite(info.price)){
+    const usePrev = inSessionNow(mk) && info.prev != null && isFinite(info.prev);
+    const num = usePrev ? info.prev : info.price;
+    const dp = isFinite(info.dp) ? info.dp : 2;
+    const px = num.toLocaleString('zh-CN',
+      {minimumFractionDigits:dp, maximumFractionDigits:dp});
+    const raw = usePrev ? (isFinite(m.lastChg) ? m.lastChg * 100 : null)
+                        : ((info.chg != null && isFinite(info.chg)) ? info.chg
+                           : (isFinite(m.lastChg) ? m.lastChg * 100 : null));
+    const chg = (raw == null || !isFinite(raw)) ? ''
+      : ` <span class="${cls(raw)}">${fmtPct(raw)}</span>`;
+    return `最新 <b>${px}${unitTxt}</b>${chg}`;
+  }
+  const lastVal = (p.v[p.v.length-1]).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:4});
+  return `最新 <b>${lastVal}${unitTxt}</b> <span class="${cls(m.lastChg*100)}">${fmtPct(m.lastChg*100)}</span>`;
+}
+
+/* 按 id 取回标的（供 __rtPaint 判定市场与时区），只建一次索引 */
+let _pById = null;
+function productById(id){
+  if (!_pById){
+    _pById = new Map();
+    for (const p of ((window.PORTFOLIO_DATA || {}).products || [])) _pById.set(p.id, p);
+  }
+  return _pById.get(id) || null;
+}
+
 window.__rtPaint = function(id, info){
+  // 同步卡片里的「最新」块（它取的是收盘价：盘中→前收、收盘后→当日收盘；见 latestHTML）
+  // 角标涨跌：场内证券用行情源自带涨跌幅；商品/汇率（现货黄金、ECB 汇率）源不提供前收，
+  //   自算「角标价 vs 卡片最新收盘价」，高于→红、低于→绿（见下方 isSpot 分支）。
+  const lt = document.getElementById('lt-'+id);
+  if (lt && RTLAST[id]) lt.innerHTML = latestHTML(RTLAST[id].p, RTLAST[id].m);
   const el = document.getElementById('rt-'+id);
   if (!el) return;
   // 无实时数据：隐藏角标，不显示占位
@@ -947,17 +1021,31 @@ window.__rtPaint = function(id, info){
     return;
   }
   el.style.display = '';
-  const hasChg = (info.chg != null && isFinite(info.chg));
-  const c = !hasChg ? 'flat' : (info.chg > 0.00005 ? 'up' : (info.chg < -0.00005 ? 'down' : 'flat'));
+  const p0 = productById(id);
+  const mk = marketOf(p0);
+  // 商品/汇率（现货黄金、ECB 汇率）：数据源不提供前收，故自算「角标价 vs 卡片最新收盘价」的偏离——
+  // 高于表格最新价 → 红，低于 → 绿（A股习惯）。仅这两类启用，且只在源缺涨跌时兜底，
+  // 场内证券仍用腾讯自带涨跌幅，行为完全不变。
+  const isSpot = !!(p0 && (p0.src === 'goldcny' || p0.src === 'fx'));
+  let chg = info.chg;
+  if (isSpot && (chg == null || !isFinite(chg)) && p0.v && p0.v.length){
+    const base = +p0.v[p0.v.length - 1];
+    if (base > 0 && isFinite(base)) chg = (info.price - base) / base * 100;
+  }
+  const hasChg = (chg != null && isFinite(chg));
+  const c = !hasChg ? 'flat' : (chg > 0.00005 ? 'up' : (chg < -0.00005 ? 'down' : 'flat'));
   el.className = 'rtb ' + c;
-  const arrow = !hasChg ? '' : (info.chg > 0.00005 ? '▲' : (info.chg < -0.00005 ? '▼' : '—'));
+  const arrow = !hasChg ? '' : (chg > 0.00005 ? '▲' : (chg < -0.00005 ? '▼' : '—'));
   const dp = info.dp || 2;
   const price = info.price.toLocaleString('zh-CN',
     {minimumFractionDigits:dp, maximumFractionDigits:dp});
   const tag = info.tag ? info.tag + ' ' : '';
-  el.innerHTML = tag + price + (hasChg ? ' <b>' + arrow + ' ' + fmtPct(info.chg) + '</b>' : '');
+  el.innerHTML = tag + price + (hasChg ? ' <b>' + arrow + ' ' + fmtPct(chg) + '</b>' : '');
   const dt = fmtDataTime(info.ts);
-  el.title = (tag.trim() ? (tag.trim() + ' · ') : '') + '数据时间 ' + (dt || '—') + '（北京时间，不并入收益曲线）';
+  const tzName = info.tz || (mk && MKSEG[mk] ? MKSEG[mk].name : '');
+  el.title = (tag.trim() ? (tag.trim() + ' · ') : '') + '数据时间 ' + (dt || '—')
+    + '（' + (tzName ? tzName + '，' : '') + '盘中实时价，不并入收益曲线'
+    + (isSpot ? '；涨跌＝相对卡片最新价' : '') + '）';
 };
 
 /* 国债收益率卡片的统计条：显示各期限当前利率 + 区间变动(bp)，
@@ -980,14 +1068,12 @@ function renderStats(p){
   if (p.kind === 'yield') return renderYieldStats(el, p);
   const m = metrics(p);
   if (!m){ el.innerHTML = `<span class="stat">该区间数据不足</span>`; return; }
-  const unitLatest = p.unit === '点' ? '' : (p.unit==='CNY' ? '' : ' ' + p.unit);
-  const lastVal = (p.v[p.v.length-1]).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:4});
+  RTLAST[p.id] = {p, m};
   el.innerHTML = `
     <span class="r ${cls(m.ret*100)}">${fmtPct(m.ret*100)}</span>
     <span class="stat">最大回撤 <b class="${cls(m.mdd*100)}">${fmtPct(m.mdd*100)}</b></span>
     <span class="stat">${isNaN(m.ann)?'—':'年化 <b class="'+cls(m.ann*100)+'">'+fmtPct(m.ann*100)+'</b>'}</span>
-    <span class="stat">最新 <b>${lastVal}${unitLatest}</b>
-      <span class="${cls(m.lastChg*100)}">${fmtPct(m.lastChg*100)}</span></span>
+    <span class="stat" id="lt-${p.id}">${latestHTML(p, m)}</span>
     <span class="stat" style="color:var(--muted2)">${m.from} → ${m.to}</span>
     ${m.trimmed ? `<span class="stat" style="color:#a3312a">⚠ 前复权早期股价失真（累计分红超出当期股价），
        起点已顺延至 ${m.cutAt}；执行 <code>python update_data.py --full</code> 取后复权口径可修复</span>` : ''}`;
@@ -999,15 +1085,16 @@ function renderStats(p){
 }
 
 /* 配对子标的的信息行：列结构（收益/回撤/年化/最新/区间）与基准一致以便对齐，
-   另补「溢价率」这类仅 ETF 才有的不可对齐信息。 */
+   另补「溢价率」这类仅 ETF 才有的不可对齐信息。
+   「最新」同样走 latestHTML 单一出口（与基准行、与右上角角标同一策略），
+   并登记 RTLAST + 挂 id，使实时角标到达时这一行也一起刷新。 */
 function attachedStatsHTML(a, m){
-  const unitLatest = (a.unit && a.unit!=='点' && a.unit!=='CNY') ? (' '+a.unit) : '';
-  const lastVal = (a.v[a.v.length-1]).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:4});
   let html = `<div class="pattach"><div class="pname">${a.name}<span class="pcode">${a.code}</span></div>`;
   html += `<span class="r ${cls(m.ret*100)}">${fmtPct(m.ret*100)}</span>`;
   html += `<span class="stat">最大回撤 <b class="${cls(m.mdd*100)}">${fmtPct(m.mdd*100)}</b></span>`;
   html += `<span class="stat">${isNaN(m.ann)?'—':'年化 <b class="'+cls(m.ann*100)+'">'+fmtPct(m.ann*100)+'</b>'}</span>`;
-  html += `<span class="stat">最新 <b>${lastVal}${unitLatest}</b> <span class="${cls(m.lastChg*100)}">${fmtPct(m.lastChg*100)}</span></span>`;
+  RTLAST[a.id] = {p: a, m};
+  html += `<span class="stat" id="lt-${a.id}">${latestHTML(a, m)}</span>`;
   html += `<span class="stat" style="color:var(--muted2)">${m.from} → ${m.to}</span>`;
   if (a.premNow != null && isFinite(a.premNow)){
     const pc = a.premNow >= 0 ? 'up' : 'down';

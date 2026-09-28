@@ -183,10 +183,18 @@ async function frRange(pair, sinceDate) {
 }
 
 /* ------------------------------------------- ④ 实时价角标（仅展示，不并入收益率曲线）
-   - A股/ETF/指数/港股/美股指数：腾讯 qt.gtimg.cn（<script src> JSONP，不受 CORS 限制）
-   - 开放式基金：天天基金 fundgz（<script src>，日内估算净值 gsz + gszzl）；被 ASN 拦截时降级「—」
-   - 黄金(goldcny)：GoldAPI 现货 XAU/USD（fetch，CORS=*，秒级，免 key）× 实时美兑人 → 折算 元/克（仅展示价，无涨跌）
-   - 汇率(fx)：open.er-api.com 美兑人（fetch，CORS=*，小时级，免 key）（仅展示价，无涨跌）
+   - 场内证券（A股/场内基金ETF/指数/港股/美股指数）：腾讯 qt.gtimg.cn（<script src> JSONP，不受 CORS 限制）
+     · 报价小数位按品种定（quoteDp）：场内基金/ETF 3 位，股票/指数/港股 2 位
+   - 开放式基金：原用天天基金 fundgz（日内估算净值）—— 该接口现已失效
+     （https://fundgz.1234567.com.cn/js/{code}.js 一律返回「页面未找到」的 HTML，2026-09 实测），
+     故【不再发出请求】，场外基金没有盘中实时价、也就【没有角标】，
+     卡片「最新」回退产物口径（红利再投资复权净值）。备选通道见 rtCodeOf() 注释。
+   - 黄金(goldcny)：GoldAPI 现货 XAU/USD（fetch，CORS=*，秒级，免 key）× 实时美兑人 → 折算 元/克
+   - 汇率(fx)：open.er-api.com 美兑人（fetch，CORS=*，小时级，免 key）
+     这两类的源都不提供前收，故这里只给「价」，涨跌由 index.html 的 __rtPaint 自算
+     （角标价 vs 卡片「最新」收盘价：高于→红、低于→绿）。
+   角标的「数据时间」按 Data source 所在地时区标注（黄金=纽约时间、汇率=中欧时间；
+   场内证券由腾讯返回当地时区，见 index.html 的 TZNAME）。
    颜色遵循 A股习惯：红涨绿跌。 */
 const RT = { data:{}, running:false };
 window.__rtData = RT.data;                 // 供 index.html 渲染卡片时回放缓存
@@ -194,7 +202,12 @@ window.__rtData = RT.data;                 // 供 index.html 渲染卡片时回�
 function rtCodeOf(p){
   if (p.src === 'goldcny') return {mode:'gold'};
   if (p.src === 'fx')     return {mode:'fx'};
-  if (p.src === 'fund')   return {mode:'fund', code: String(p.secid || p.code).padStart(6,'0')};
+  // 场外基金（src=fund）：天天基金 fundgz 接口已失效（2026-09 实测一律返回「页面未找到」的 HTML），
+  // 故【不再发出请求】，也就没有角标——场外基金没有盘中实时价，右上角不应出现角标。
+  // 备选通道（实测可用，尚未接入）：腾讯 qt.gtimg.cn/q=jj{code}
+  //   字段 5=单位净值 6=累计净值 7=日涨跌% 8=净值日期；
+  //   接入后场外基金「最新」会从【红利再投资复权净值】变成【单位净值】（口径变更，影响 24 张卡），需主人确认。
+  if (p.src === 'fund')   return {mode:'none'};
   const c = channelOf(p);
   // 关键：实时角标走的是 <script src> JSONP，腾讯会把代码原样用作变量名——
   // 带点的代码（如 us.INX）会返回 `v_us.INX="..."`，那是「对变量 v_us 取属性」→
@@ -214,7 +227,21 @@ function parseTx(str){
   let chg = parseFloat(f[32]);                       // 腾讯自带涨跌幅%，直接用
   if (!(prev > 0) || !isFinite(chg)) chg = (price - prev) / prev * 100;
   if (!isFinite(chg)) return null;
-  return {price, chg, ts: (f[30] || '').replace(/\//g,'-')};
+  // prev = 前收，供 index.html 的「最新」在【盘中】取用（盘中「最新」应是最近收盘价，不是实时价）
+  return {price, chg, prev: (prev > 0 ? prev : null), ts: (f[30] || '').replace(/\//g,'-')};
+}
+/* 报价精度：按【交易品种】定，不能一律 2 位。
+     场内基金/ETF 最小报价单位是 0.001 元（深市 15x/16x/18x、沪市 5xx），
+     用 2 位会把 0.802 显示成 0.80、1.041 显示成 1.04，与产物/实际价对不上；
+     股票、指数、港股均为 2 位。 */
+function quoteDp(p){
+  const m = String(p.secid || '').match(/^(\d+)\.(.+)$/);
+  if (!m) return 2;                                    // us.INX / us.NDX 等海外指数
+  const mk = m[1], body = m[2];
+  if (mk === '116') return 2;                          // 港股
+  if ((mk === '0' && /^1[5-9]/.test(body))             // 深市基金：159xxx / 16xxxx / 18xxxx
+   || (mk === '1' && /^5/.test(body))) return 3;       // 沪市基金：5xxxxx（510/513/560/588…）
+  return 2;                                            // A股个股 / 指数
 }
 function loadTxScript(codes){
   return new Promise(res => {
@@ -228,31 +255,6 @@ function loadTxScript(codes){
     document.head.appendChild(s);
   });
 }
-const _fundWaiters = new Map();
-window.jsonpgz = function(d){
-  if (!d || !d.fundcode) return;
-  const w = _fundWaiters.get(d.fundcode);
-  if (w && !w.settled){ w.settled = true; clearTimeout(w.t); try{w.s.remove();}catch(e){} w.res(d); }
-};
-function loadFundScript(code){
-  return new Promise(res => {
-    const s = document.createElement('script');
-    const w = {res, s, settled:false, t:null};
-    w.t = setTimeout(() => { if(!w.settled){ w.settled=true; _fundWaiters.delete(code); try{s.remove();}catch(e){} res(null); } }, 9000);
-    _fundWaiters.set(code, w);
-    s.onload  = () => { if(!w.settled){ w.settled=true; clearTimeout(w.t); _fundWaiters.delete(code); try{s.remove();}catch(e){} res(null); } };
-    s.onerror = () => { if(!w.settled){ w.settled=true; clearTimeout(w.t); _fundWaiters.delete(code); try{s.remove();}catch(e){} res(null); } };
-    s.src = 'https://fundgz.1234567.com.cn/js/' + code + '.js?rt=' + Date.now();
-    document.head.appendChild(s);
-  });
-}
-function fundInfo(d){
-  const gsz = parseFloat(d.gsz), dwjz = parseFloat(d.dwjz), chg = parseFloat(d.gszzl);
-  const price = (isFinite(gsz) && gsz > 0) ? gsz : (isFinite(dwjz) ? dwjz : null);
-  if (price == null || !isFinite(chg)) return null;
-  const isEst = isFinite(gsz) && gsz > 0;
-  return {price, chg, dp:4, tag: isEst ? '估' : '净', ts: d.gztime || ''};
-}
 function inTradingNow(){
   const t = new Date(Date.now() + 8*3600e3);          // 北京时间
   const dow = t.getUTCDay();
@@ -263,14 +265,25 @@ function inTradingNow(){
 
 /* ------------------------------------- ④b 商品/汇率 实时（fetch, CORS=*，免 key） */
 const TROY_OZ_G = 31.1034768;          // 1 金衡盎司 = 克
-/** USD→CNY 汇率（小时级） */
+/** 把绝对时刻格式化为【指定时区】的 'YYYY-MM-DD HH:MM'。
+    商品/汇率是 24h 市场，用北京时间展示会让人误以为「现在还在交易」，
+    故按数据源所在地时区呈现：现货金→纽约时间，ECB 参考汇率→中欧时间。 */
+function tzStamp(ms, tz){
+  try{
+    const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: tz, hour12: false,
+      year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+    const o = {}; for (const x of fmt.formatToParts(new Date(ms))) o[x.type] = x.value;
+    return o.year + '-' + o.month + '-' + o.day + ' ' + String(parseInt(o.hour,10) % 24).padStart(2,'0') + ':' + o.minute;
+  }catch(e){ return bjStamp(ms); }
+}
+/** USD→CNY 汇率（小时级，ECB 参考汇率口径） */
 async function fetchFxRate(){
   const r = await fetch('https://open.er-api.com/v6/latest/USD', {cache:'no-store'});
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const j = await r.json();
   if (!j || j.result !== 'success' || !j.rates || !(j.rates.CNY > 0)) throw new Error('无 CNY 汇率');
-  const ts = bjStamp(j.time_last_update_unix ? j.time_last_update_unix * 1000 : Date.now());
-  return { cny: +j.rates.CNY, ts };
+  const ms = j.time_last_update_unix ? j.time_last_update_unix * 1000 : Date.now();
+  return { cny: +j.rates.CNY, ts: tzStamp(ms, 'Europe/Berlin'), tz: '中欧时间' };
 }
 /** XAU/USD 现货（秒级） */
 async function fetchGoldUsd(){
@@ -278,10 +291,11 @@ async function fetchGoldUsd(){
   if (!r.ok) throw new Error('HTTP ' + r.status);
   const j = await r.json();
   if (!j || !(j.price > 0)) throw new Error('无金价');
-  const ts = bjStamp(j.updatedAt ? Date.parse(j.updatedAt) : Date.now());
-  return { price: +j.price, ts };
+  const ms = j.updatedAt ? Date.parse(j.updatedAt) : Date.now();
+  return { price: +j.price, ts: tzStamp(ms, 'America/New_York'), tz: '纽约时间' };
 }
-/** 商品/汇率实时角标：黄金=现货XAU×美兑人折算元/克；汇率=美兑人。源不提供前收，故无涨跌。 */
+/** 商品/汇率实时角标：黄金=现货XAU×美兑人折算元/克；汇率=美兑人。
+    源不提供前收，故只给价（chg=null），红绿由 index.html::__rtPaint 对比卡片「最新」价自算。 */
 async function fetchSpotRealtime(){
   const fxList   = D.products.filter(p => p.src === 'fx');
   const goldList = D.products.filter(p => p.src === 'goldcny');
@@ -289,7 +303,7 @@ async function fetchSpotRealtime(){
   let fx = null;
   try { fx = await fetchFxRate(); } catch (e) { fx = null; }
   for (const p of fxList){
-    const info = fx ? {price: fx.cny, chg: null, dp: 4, tag: '汇', ts: fx.ts} : null;
+    const info = fx ? {price: fx.cny, chg: null, dp: 4, tag: '汇', ts: fx.ts, tz: fx.tz} : null;
     RT.data[p.id] = info;
     if (window.__rtPaint) window.__rtPaint(p.id, info);
   }
@@ -300,7 +314,7 @@ async function fetchSpotRealtime(){
       const g = await fetchGoldUsd();
       if (rate != null){
         const cnyPerGram = g.price * rate / TROY_OZ_G;
-        const info = {price: cnyPerGram, chg: null, dp: 2, tag: '现', ts: g.ts};
+        const info = {price: cnyPerGram, chg: null, dp: 2, tag: '现', ts: g.ts, tz: g.tz};
         for (const p of goldList){ RT.data[p.id] = info; if (window.__rtPaint) window.__rtPaint(p.id, info); }
       } else {
         for (const p of goldList){ RT.data[p.id] = null; if (window.__rtPaint) window.__rtPaint(p.id, null); }
@@ -315,11 +329,9 @@ async function fetchRealtime(){
   RT.running = true;
   try {
     const txCodes = [], txMap = new Map();
-    const fundCodes = [], fundMap = new Map();
     for (const p of D.products){
       const r = rtCodeOf(p);
       if (r.mode === 'tx'){ txCodes.push(r.code); txMap.set(r.code, p); }
-      else if (r.mode === 'fund'){ fundCodes.push(r.code); fundMap.set(r.code, p); }
     }
     for (let i = 0; i < txCodes.length; i += 40){
       const chunk = txCodes.slice(i, i+40);
@@ -327,18 +339,11 @@ async function fetchRealtime(){
       for (const code of chunk){
         const p = txMap.get(code); if (!p) continue;
         const info = window['v_'+code] ? parseTx(window['v_'+code]) : null;
-        if (info){ info.dp = 2; info.tag = '盘'; }
+        if (info){ info.dp = quoteDp(p); info.tag = '盘'; }
         RT.data[p.id] = info || null;
         if (window.__rtPaint) window.__rtPaint(p.id, info);
       }
     }
-    await pool(fundCodes, 3, async (code) => {
-      const p = fundMap.get(code); if (!p) return;
-      const d = await loadFundScript(code);
-      const info = d ? fundInfo(d) : null;
-      RT.data[p.id] = info || null;
-      if (window.__rtPaint) window.__rtPaint(p.id, info);
-    });
     await fetchSpotRealtime();              // 商品/汇率：24h×工作日，随时刷新
   } catch(e){ /* 实时角标失败不影响主曲线 */ }
   finally { RT.running = false; }
