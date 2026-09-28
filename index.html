@@ -266,6 +266,7 @@ const RANGES = [
   {k:'ytd',     t:'今年来'},
 ];
 const UP='#d0382f', DOWN='#12a05c', FLAT='#9a9aa1';
+const YC=['#2a6bd0', '#e08a1e', '#7a52c9'];   // 国债收益率 1Y / 3Y / 10Y 三线配色
 const PALETTE=['#2a6bd0','#d0382f','#12a05c','#e0a800','#8250c4','#0f8fa8','#e2703a','#4a7a3a','#b5487a','#5a6b8c','#8a6d3b','#3a8fb8'];
 const LS = {hidden:'nv_hidden_v1', since:'nv_since_v1', range:'nv_range_v1'};
 
@@ -651,7 +652,7 @@ function chartConfig(idxs, labels, seriesList, opts){
         y:{ position:'right',
             grid:{ color:(c)=> c.tick.value===0 ? '#c8c8cf' : '#f1f1f3' },
             border:{display:false},
-            ticks:{ callback:v=>v.toFixed(0)+'%', color:'#9a9aa1', font:{size:10.5} } }
+            ticks:{ callback:v=>v.toFixed((opts&&opts.yDec)||0)+'%', color:'#9a9aa1', font:{size:10.5} } }
       }
     }
   };
@@ -667,6 +668,7 @@ function valSeries(p, dates){
 
 function drawChart(canvas, p){
   if (charts.has(canvas)) { charts.get(canvas).destroy(); charts.delete(canvas); }
+  if (p.kind === 'yield') return drawYieldChart(canvas, p);
   const m = metrics(p);
   if (!m){ canvas.style.display='none'; const n = canvas.parentNode.querySelector('.nodata'); if(n) n.style.display=''; return; }
   canvas.style.display='';
@@ -682,6 +684,63 @@ function drawChart(canvas, p){
   const ch = new Chart(canvas.getContext('2d'),
     chartConfig(null, L.x, [base], {valBand: vs ? {kind:vs.vkind, pre:vs.vpre} : null}));
   charts.set(canvas, ch);
+}
+
+/* ============================================================ 多序列标的：中债国债收益率
+   kind==='yield' 的标的带 y1 / y3 / y10 三条序列，共享同一日期轴，画在同一张图里。
+   纵轴是【利率水平 %】（如 1.68%），不做归一化——利率是水平值而非净值，
+   归一化会把「2% → 1%」显示成 -50%，严重误导。区间变动用 bp 表示。 */
+function metricsYield(p){
+  if (!p.d || !p.y1 || !p.y3 || !p.y10) return null;
+  const raw = slice(p, state.range);       // 主序列(10Y)只用于确定区间起点索引
+  if (!raw || raw.d.length < 2) return null;
+  const st = raw.start;
+  const d = p.d.slice(st);
+  const y1 = p.y1.slice(st), y3 = p.y3.slice(st), y10 = p.y10.slice(st);
+  const li = d.length - 1;
+  return {
+    d, y1, y3, y10, from: d[0], to: d[li],
+    last:  {y1: y1[li],  y3: y3[li],  y10: y10[li]},
+    chgBp: {y1: (y1[li]-y1[0])*100, y3: (y3[li]-y3[0])*100, y10: (y10[li]-y10[0])*100},
+  };
+}
+
+function yieldSeries(m){
+  return [
+    {key:'y1',  name:'1Y',  ys:m.y1,  last:m.last.y1,  color:YC[0]},
+    {key:'y3',  name:'3Y',  ys:m.y3,  last:m.last.y3,  color:YC[1]},
+    {key:'y10', name:'10Y', ys:m.y10, last:m.last.y10, color:YC[2]},
+  ];
+}
+
+function yieldDatasets(m){
+  const ss = yieldSeries(m);
+  const labels = lttb(m.d, m.y1, 900).x;   // lttb 对同一 x 输入给出同一套索引，三线共享
+  return {labels, ss, ds: ss.map(s => {
+    const L = lttb(m.d, s.ys, 900);
+    return {name:s.name, data:L.y, raw:L.y, color:s.color, fill:false, seg:false};
+  })};
+}
+
+function drawYieldChart(canvas, p){
+  const m = metricsYield(p);
+  if (!m){
+    canvas.style.display='none';
+    const n = canvas.parentNode.querySelector('.nodata'); if(n) n.style.display='';
+    const lg = document.getElementById('lg-'+p.id); if(lg) lg.style.display='none';
+    return;
+  }
+  canvas.style.display='';
+  const nd = canvas.parentNode.querySelector('.nodata'); if(nd) nd.style.display='none';
+  const {labels, ss, ds} = yieldDatasets(m);
+  charts.set(canvas, new Chart(canvas.getContext('2d'), chartConfig(null, labels, ds, {yDec:2})));
+  const lg = document.getElementById('lg-'+p.id);
+  if (lg){
+    lg.style.display='';
+    lg.innerHTML = ss.map(s =>
+      `<span><i style="background:${s.color}"></i>${s.name} <b>${s.last.toFixed(2)}%</b></span>`
+    ).join('') + `<span style="color:var(--muted2)">${m.from} → ${m.to}</span>`;
+  }
 }
 
 /* ============================================================ 卡片 */
@@ -700,6 +759,7 @@ function cardHTML(p, i){
     </div>
     <div class="stats" id="st-${p.id}"></div>
     <div class="chartbox"><canvas></canvas><div class="nodata" style="display:none">该区间数据不足</div></div>
+    <div class="legendline" id="lg-${p.id}" style="display:none"></div>
   </div>`;
 }
 
@@ -746,11 +806,24 @@ window.__rtPaint = function(id, info){
   el.title = (tag.trim() ? (tag.trim() + ' · ') : '') + '数据时间 ' + (dt || '—') + '（北京时间，不并入收益曲线）';
 };
 
+/* 国债收益率卡片的统计条：显示各期限当前利率 + 区间变动(bp)，
+   不显示收益/回撤/年化——那些指标对利率水平没有意义。 */
+function renderYieldStats(el, p){
+  const m = metricsYield(p);
+  if (!m){ el.innerHTML = `<span class="stat">该区间数据不足</span>`; return; }
+  const bp = v => (v>=0?'+':'') + v.toFixed(0) + 'bp';
+  el.innerHTML = yieldSeries(m).map(s =>
+    `<span class="stat">${s.name} <b>${s.last.toFixed(2)}%</b>
+       <span class="${cls(m.chgBp[s.key])}">${bp(m.chgBp[s.key])}</span></span>`
+  ).join('') + `<span class="stat" style="color:var(--muted2)">${m.from} → ${m.to} · 区间变动</span>`;
+}
+
 function renderStats(p){
   const el = document.getElementById('st-'+p.id);
   if (!el) return;
   renderValBadge(p);
   if (window.__rtPaint) window.__rtPaint(p.id, (window.__rtData || {})[p.id] || null);
+  if (p.kind === 'yield') return renderYieldStats(el, p);
   const m = metrics(p);
   if (!m){ el.innerHTML = `<span class="stat">该区间数据不足</span>`; return; }
   const unitLatest = p.unit === '点' ? '' : (p.unit==='CNY' ? '' : ' ' + p.unit);
@@ -768,7 +841,8 @@ function renderStats(p){
 
 /* ============================================================ 汇总条 */
 function renderStrip(list){
-  const rows = list.map(p => ({p, m:metrics(p)})).filter(x=>x.m)
+  // 国债收益率是利率水平，不是收益，参与涨幅排行会造成语义错误，故排除
+  const rows = list.filter(p=>p.kind!=='yield').map(p => ({p, m:metrics(p)})).filter(x=>x.m)
                    .sort((a,b)=>b.m.ret-a.m.ret);
   if (!rows.length){ $('#strip').innerHTML=''; return; }
   // 前 6（表现最好）+ 后 3（表现最差）；同一标的绝不重复出现。
@@ -787,7 +861,8 @@ function renderStrip(list){
 
 /* ============================================================ 对比图 */
 function renderCompare(){
-  const list = visibleProducts();
+  // 国债收益率是利率水平，归一化成「涨跌%」后与净值曲线混在一起会严重误导，故排除
+  const list = visibleProducts().filter(p => p.kind !== 'yield');
   const host = $('#grid');
   host.innerHTML = `<div class="card wide" id="cmpCard">
       <div class="chead"><div>
@@ -894,6 +969,18 @@ function zoom(p){
     <div id="bigStats" style="margin-top:10px"></div>`;
   dlg.showModal();
   requestAnimationFrame(()=>{
+    const cv0 = $('#bigCanvas');
+    if (charts.has(cv0)) { charts.get(cv0).destroy(); charts.delete(cv0); }
+    if (p.kind === 'yield'){
+      const my = metricsYield(p); if(!my) return;
+      const {labels, ss, ds} = yieldDatasets(my);
+      charts.set(cv0, new Chart(cv0.getContext('2d'), chartConfig(null, labels, ds, {yDec:2})));
+      const bp = v => (v>=0?'+':'') + v.toFixed(0) + 'bp';
+      $('#bigStats').innerHTML = `区间 ${my.from} → ${my.to} · ${my.d.length} 个交易日 · `
+        + ss.map(s => `${s.name} <b>${s.last.toFixed(2)}%</b>
+            <span class="${cls(my.chgBp[s.key])}">${bp(my.chgBp[s.key])}</span>`).join(' · ');
+      return;
+    }
     const m = metrics(p); if(!m) return;
     const s = m.s;
     const ratio = s.v.map(x => (x/s.v[0]-1)*100);

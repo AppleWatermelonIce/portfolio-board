@@ -375,6 +375,107 @@ def fetch_gold_cny(p, need_full, since):
     return out_d, out_v
 
 
+# ---------------------------------------------------------------- 中债国债收益率曲线
+CN_GOV_YC_ID = "2c9081e50a2f9606010a3068cae70001"   # 中债国债收益率曲线(到期)
+YIELD_BATCH = 6          # 接口单次最多 6 个日期
+YIELD_WORKERS = 4        # 批次并行度（中债对并发敏感，太高会超时）
+YIELD_YEARS = 5          # 全量时的历史长度（年）
+
+# ⚠ 必须绕过本机代理：中债走 HTTP_PROXY 会 502 Bad Gateway（Tunnel connection failed）。
+#   国内站点直连更稳，这里建一个不含代理的 opener。
+_NO_PROXY_OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=_ctx))
+
+
+def _cn_yield_batch(days, retries=3):
+    """查一批（≤6 个日期）国债收益率曲线，返回 {日期: {期限年: 收益率%}}。
+       实测要点：必须 POST（GET 返回 405），参数全在 querystring，表单体为空；
+       期限网格里 1 / 3 / 10 年是精确节点，直接按浮点等值取。
+
+       ⚠ 容错优先：中债偶发超时（WinError 10060）/ 502，单批失败只放弃这一批
+       （返回空字典），绝不让个别批次拖垮整个标的——少几个交易日远好过整体缺失。"""
+    qs = ("xyzSelect=txy&&workTimes=%s&&dxbj=0&&qxll=0,&&yqqxN=N&&yqqxK=K"
+          "&&ycDefIds=%s&&locale=zh_CN" % (",".join(days), CN_GOV_YC_ID))
+    url = "https://yield.chinabond.com.cn/cbweb-mn/yc/searchYc?" + qs
+    req = urllib.request.Request(url, data=b"{}", method="POST", headers={
+        "User-Agent": UA,
+        "Referer": "https://yield.chinabond.com.cn/cbweb-mn/yield_main?locale=zh_CN",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "X-Requested-With": "XMLHttpRequest",
+        "Connection": "close",
+    })
+    arr = None
+    for attempt in range(retries):
+        try:
+            with _NO_PROXY_OPENER.open(req, timeout=40) as r:
+                arr = json.loads(r.read().decode("utf-8", "replace"))
+            break
+        except Exception:
+            if attempt >= retries - 1:
+                return {}                      # 该批放弃，交给 merge 与其它批次的结果
+            time.sleep(0.6 * (attempt + 1) + random.random() * 0.4)
+    if arr is None:
+        return {}
+    out = {}
+    for it in (arr or []):
+        d = it.get("worktime")
+        if not d:
+            continue
+        hit = {}
+        for t, y in (it.get("seriesData") or []):
+            for k in (1, 3, 10):
+                if abs(float(t) - k) < 1e-6:
+                    hit[k] = float(y)
+        if len(hit) == 3:
+            out[d] = hit
+    return out
+
+
+def fetch_cn_gov_yield(need_full=True, since=None, years=YIELD_YEARS):
+    """中债国债收益率曲线 1Y/3Y/10Y 历史，单位 %（利率水平，不是涨跌幅）。
+
+       · 权威源：中国债券信息网（中债估值），T+1 发布
+       · 接口限制：单次最多 6 个日期 → 按 6 天一批分页，批次间并行
+       · 只需传工作日（周一~周五），无估值的日期接口自然不返回"""
+    end = datetime.now(CN)
+    if need_full or not since:
+        start = end - timedelta(days=int(365 * years))
+    else:
+        start = datetime.strptime(since, "%Y-%m-%d") - timedelta(days=INCR_BACK_DAYS)
+    days, cur = [], start
+    while cur <= end:
+        if cur.weekday() < 5:              # 0=周一 ... 4=周五
+            days.append(cur.strftime("%Y-%m-%d"))
+        cur += timedelta(days=1)
+    batches = [days[i:i + YIELD_BATCH] for i in range(0, len(days), YIELD_BATCH)]
+
+    got = {}
+    with futures.ThreadPoolExecutor(max_workers=YIELD_WORKERS) as ex:
+        for out in ex.map(_cn_yield_batch, batches):
+            got.update(out)
+    if not got:
+        raise RuntimeError("中债国债收益率曲线无数据")
+    ds = sorted(got)
+    return ds, {"1Y": [got[d][1] for d in ds],
+                "3Y": [got[d][3] for d in ds],
+                "10Y": [got[d][10] for d in ds]}
+
+
+def merge_multi(old, dates, ser):
+    """多序列增量合并（以日期为键，新值覆盖旧值）"""
+    m = {}
+    if old.get("y1"):
+        for d, a, b, c in zip(old["d"], old["y1"], old["y3"], old["y10"]):
+            m[d] = (a, b, c)
+    for i, d in enumerate(dates):
+        m[d] = (ser["1Y"][i], ser["3Y"][i], ser["10Y"][i])
+    ds = sorted(m)
+    return ds, {"1Y": [m[d][0] for d in ds],
+                "3Y": [m[d][1] for d in ds],
+                "10Y": [m[d][2] for d in ds]}
+
+
 # ---------------------------------------------------------------- 基金复权净值
 def parse_unit_money(unit_money):
     """
@@ -516,16 +617,25 @@ def update_one(p, full):
         beg_since = old.get("last") or (old["d"][-1] if old and old.get("d") else None)
 
     warn = "",
+    extra = {}
     if p["src"] == "fund":
         dates, vals, warn = fetch_fund_nav(p["secid"])
         channel = "天天基金"
     elif p["src"] == "goldcny":
         dates, vals = fetch_gold_cny(p, need_full, beg_since)
         channel = "雅虎×ECB"
+    elif p["src"] == "cnyield":
+        # 多序列标的：1Y/3Y/10Y 三条曲线共享同一日期轴，画在同一张图里
+        dates, ser = fetch_cn_gov_yield(need_full, beg_since)
+        if not need_full and old and old.get("y1"):
+            dates, ser = merge_multi(old, dates, ser)
+        vals = ser["10Y"]                 # 主序列取 10Y，供通用切片/兜底使用
+        extra = {"y1": ser["1Y"], "y3": ser["3Y"], "y10": ser["10Y"], "kind": "yield"}
+        channel = "中债估值"
     else:
         (dates, vals), channel = fetch_series(p, need_full, beg_since)
 
-    if not need_full and old:
+    if not need_full and old and p["src"] != "cnyield":
         dates, vals = merge(old, dates, vals)
 
     today = datetime.now(CN).strftime("%Y-%m-%d")
@@ -537,6 +647,7 @@ def update_one(p, full):
         "last": dates[-1] if dates else "",
         "d": dates, "v": vals,
     }
+    obj.update(extra)                  # 多序列标的：y1/y3/y10 + kind
     if warn and warn != ("",):
         obj["warn"] = warn
     return pid, obj, None
@@ -592,6 +703,7 @@ def rebuild():
         h["secid"] = p.get("secid", h.get("secid"))
         h["chan"] = h.get("chan") or p.get("chan", "")
         h["chan2"] = p.get("chan2", ""); h["secid2"] = p.get("secid2", "")
+        h["kind"] = p.get("kind", "")
         plist.append(h)
     write_payload(prods, plist, tag="  [离线重建]")
     print(f"重建 {len(plist)}/{len(prods)}" + (f"，缺失 {miss}" if miss else ""))
