@@ -47,7 +47,16 @@ jobs:
             fin-
 
       - name: 更新行情净值
-        run: python scripts/update_data.py
+        # 部分标的抓取失败（典型：海外 runner 访问国内站点超时）时 update_data.py 返回 2，
+        # 但脚本已沿用上一次入仓数据、产物仍然完整 —— 按本项目「抓取失败不致命」的既定口径，
+        # 这不应当阻断后续的加密与部署。故此处容错，并把降级明细写成 annotation 便于远程诊断。
+        continue-on-error: true
+        run: |
+          python scripts/update_data.py 2>&1 | tee /tmp/upd.log
+          grep -E '\[(降级|失败)\]' /tmp/upd.log | head -20 | while IFS= read -r line; do
+            echo "::warning::UPD ${line}"
+          done
+          echo "::warning::UPD_EXIT ${PIPESTATUS[0]}"
 
       - name: 更新估值（蛋卷 + 中证A500 自算）
         run: python scripts/fetch_valuation.py
