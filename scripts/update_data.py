@@ -519,6 +519,34 @@ def _grab(txt, varname):
     return txt[j:k].strip().rstrip(";").strip()
 
 
+def fix_splits(vals, drop=-0.40, jump=1.50):
+    """份额折算兜底校正
+
+    pingzhongdata 的 unitMoney（份额折算）字段偶有缺失，东财日K后复权偶会漏处理 ETF 份额折算，
+    结果是净值在折算日出现「假瀑布」——例如 561380 在 2026-06-24 由 2.3786 折到 0.9488(-60.11%)，
+    与电网设备指数同期走势完全背离，相关性被算成 0.41（校正后 0.96）。
+
+    判据：净值型产品单日不可能跌超 40% 或涨超 150%，出现即为折算/拆分。
+    处理：把该日之前的全部点位按同一比例缩放，让折算前后回到同一份额基准。
+    ⚠ 只在全量序列上调用——增量窗口只有十余天，窗口内无跳变不代表历史干净。"""
+    n = len(vals)
+    if n < 3:
+        return vals, 0
+    out = list(vals)
+    fixes = 0
+    for i in range(1, n):
+        a, b = out[i - 1], out[i]
+        if not a or not b or a <= 0 or b <= 0:
+            continue
+        chg = b / a - 1.0
+        if chg <= drop or chg >= jump:
+            k = b / a
+            for j in range(i):
+                out[j] = round(out[j] * k, 6)
+            fixes += 1
+    return out, fixes
+
+
 def fetch_fund_nav(code):
     txt = throttled_get(f"https://fund.eastmoney.com/pingzhongdata/{code}.js",
                         referer="https://fund.eastmoney.com/")
@@ -637,6 +665,12 @@ def update_one(p, full):
     else:
         (dates, vals), channel = fetch_series(p, need_full, beg_since)
 
+    # 份额折算兜底：仅全量序列才做（增量窗口太短，看不出历史跳变）
+    if need_full and p["src"] != "cnyield" and len(dates) == len(vals):
+        vals, nfix = fix_splits(vals)
+        if nfix:
+            print(f"  [折算校正] {pid} {p['name']}：检出并还原 {nfix} 处份额折算跳变", flush=True)
+
     if not need_full and old and p["src"] != "cnyield":
         dates, vals = merge(old, dates, vals)
 
@@ -732,7 +766,7 @@ def main():
             continue
         try:
             txt = open(fp, encoding="utf-8").read()
-            txt = txt[txt.find("{"):] if fn.endswith(".js") else txt
+            txt = txt[txt.find("{"):] if fp.endswith(".js") else txt
             txt = txt.rstrip().rstrip(";")
             for pr in json.loads(txt).get("products", []):
                 prev_map.setdefault(pr["id"], pr)
