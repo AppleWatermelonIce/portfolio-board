@@ -53,10 +53,11 @@ jobs:
         continue-on-error: true
         run: |
           python scripts/update_data.py 2>&1 | tee /tmp/upd.log
+          code=${PIPESTATUS[0]}     # 必须立刻保存：后续任何命令都会重置 PIPESTATUS
           grep -E '\[(降级|失败)\]' /tmp/upd.log | head -20 | while IFS= read -r line; do
             echo "::warning::UPD ${line}"
           done
-          echo "::warning::UPD_EXIT ${PIPESTATUS[0]}"
+          echo "::warning::UPD_EXIT ${code}"
 
       - name: 更新估值（蛋卷 + 中证A500 自算）
         run: python scripts/fetch_valuation.py

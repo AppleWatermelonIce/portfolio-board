@@ -442,7 +442,9 @@ def fetch_cn_gov_yield(need_full=True, since=None, years=YIELD_YEARS):
     if need_full or not since:
         start = end - timedelta(days=int(365 * years))
     else:
-        start = datetime.strptime(since, "%Y-%m-%d") - timedelta(days=INCR_BACK_DAYS)
+        # ⚠ 必须补 tzinfo：end 是 aware（CN），naive 与 aware 相减/比较会抛
+        #   "can't compare offset-naive and offset-aware datetimes"
+        start = datetime.strptime(since, "%Y-%m-%d").replace(tzinfo=CN) - timedelta(days=INCR_BACK_DAYS)
     days, cur = [], start
     while cur <= end:
         if cur.weekday() < 5:              # 0=周一 ... 4=周五
