@@ -627,11 +627,54 @@ def merge(old, dates, vals):
     return ds, [m[d] for d in ds]
 
 
-# ---------------------------------------------------------------- ETF 价-净溢价率
-def fetch_etf_premium(code, dates, vals):
-    """ETF 价-净溢价率 = (二级市价 - 单位净值) / 单位净值 × 100%。
-       单位净值取自天天基金 pingzhongdata 的 Data_netWorthTrend（y 字段，按交易日对齐）。
-       仅用于「信息行」展示最新溢价率（非历史曲线），故只回传最新一个非空值与其日期。"""
+# ---------------------------------------------------------------- ETF 场内实时溢价率（腾讯行情）
+def fetch_etf_premium_tx(code, secid):
+    """ETF 场内交易实时溢价率，取自腾讯行情快照（交易所口径，含 IOPV 参考净值）。
+       腾讯 ETF 扩展字段（~ 分隔）：索引 3=现价、77=溢价率(%)、78=参考净值(IOPV)。
+       溢价率以 (现价 - IOPV)/IOPV 自算为主，腾讯给出的溢价率用于交叉校验。
+       返回 {'premNow','premDate','premIOPV','premPrice'}；失败返回 None。"""
+    import re as _re
+    mkt = "sh" if str(secid).split(".")[0] == "1" else "sz"
+    url = f"https://qt.gtimg.cn/q={mkt}{code}"
+    try:
+        raw = throttled_get(url, referer="https://gu.qq.com/")
+    except Exception as e:
+        print(f"  [溢价率] {code} 腾讯行情抓取失败：{type(e).__name__} {str(e)[:60]}", flush=True)
+        return None
+    txt = raw.decode("gbk", "replace") if isinstance(raw, (bytes, bytearray)) else raw
+    m = _re.search(r'"([^"]*)"', txt)
+    if not m:
+        return None
+    parts = m.group(1).split("~")
+    if len(parts) < 79:
+        print(f"  [溢价率] {code} 腾讯字段不足（{len(parts)} 段）", flush=True)
+        return None
+    def _f(i):
+        try:
+            return float(parts[i])
+        except Exception:
+            return None
+    price, iopv, prem = _f(3), _f(78), _f(77)
+    calc = ((price - iopv) / iopv * 100) if (iopv and iopv > 0 and price and price > 0) else None
+    if calc is not None and (prem is None or abs(prem - calc) > 0.5):
+        prem = calc                              # 腾讯溢价率缺失/偏离过大时以自算为准
+    if prem is None:
+        return None
+    ts = parts[30] if len(parts) > 30 else ""    # 形如 20260928161439
+    pdate = f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]}" if len(ts) >= 8 else ""
+    return {"premNow": round(prem, 4), "premDate": pdate,
+            "premIOPV": round(iopv, 4) if iopv else None,
+            "premPrice": round(price, 4) if price else None}
+
+
+# ---------------------------------------------------------------- ETF 价-净溢价率（回退通道）
+def fetch_etf_premium(code, secid, dates, vals):
+    """ETF 溢价率：优先取腾讯行情快照的场内实时溢价率（交易所口径，含 IOPV）；
+       腾讯不可用时回退 (二级市价 - 单位净值)/单位净值（单位净值取自天天基金 pingzhongdata）。
+       仅用于「信息行」展示最新溢价率（非历史曲线）。"""
+    tx = fetch_etf_premium_tx(code, secid)
+    if tx:
+        return tx
     import re as _re
     url = f"https://fund.eastmoney.com/pingzhongdata/{code}.js"
     try:
@@ -713,7 +756,7 @@ def update_one(p, full):
 
     # ETF 价-净溢价率（仅场内 ETF 标的、且标记 prem:true 时抓取）
     if p.get("prem") and dates and vals and len(dates) == len(vals):
-        pr = fetch_etf_premium(p["id"], dates, vals)
+        pr = fetch_etf_premium(p["id"], p["secid"], dates, vals)
         if pr:
             extra.update(pr)
 
