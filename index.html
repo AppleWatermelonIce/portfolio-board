@@ -123,6 +123,10 @@ input:focus,select:focus{border-color:var(--accent)}
 .legendline i{width:14px;height:3px;border-radius:2px;display:inline-block}
 .legendline span.off{opacity:.32}
 .empty{padding:50px 0;text-align:center;color:var(--muted2)}
+/* 配对子标的的信息行：与基准信息对齐，但用分隔线独立成块 */
+.pattach{border-top:1px dashed var(--line);margin-top:7px;padding-top:7px;display:flex;flex-wrap:wrap;gap:3px 14px;align-items:center}
+.pattach .pname{font-size:12.5px;font-weight:600;color:var(--text);flex:0 0 100%;display:flex;align-items:baseline;gap:6px}
+.pattach .pcode{font-size:11px;color:var(--muted2);font-weight:400}
 
 /* ---------- 估值底色（PE / PB 历史分位） ---------- */
 .vb{
@@ -591,11 +595,18 @@ function renderToolbar(){
 function visibleProducts(){
   const q = state.q.trim().toLowerCase();
   return DATA.products.filter(p => {
+    if (p.pair) return false;                 // 配对标的渲染在基准卡片内，主列表不单列
     if (state.hidden.has(p.id)) return false;
     if (state.group !== '全部' && p.group !== state.group) return false;
     if (q && !(p.name.toLowerCase().includes(q) || String(p.code).toLowerCase().includes(q))) return false;
     return true;
   });
+}
+
+/* 取某个基准标的所挂的配对子标的（如 中证A500 → 国金中证A500指数增强A） */
+function pairedOf(p){
+  return DATA.products.filter(x => x.pair === p.id)
+    .sort((a,b) => (a.order||0) - (b.order||0));
 }
 
 /* ============================================================ 图表 */
@@ -674,6 +685,10 @@ function valSeries(p, dates){
 function drawChart(canvas, p){
   if (charts.has(canvas)) { charts.get(canvas).destroy(); charts.delete(canvas); }
   if (p.kind === 'yield') return drawYieldChart(canvas, p);
+  const atts = pairedOf(p);
+  if (atts.length && atts.some(a => metrics(a)))
+    return drawChartPair(canvas, p, atts);
+  // ---- 单序列默认渲染 ----
   const m = metrics(p);
   if (!m){ canvas.style.display='none'; const n = canvas.parentNode.querySelector('.nodata'); if(n) n.style.display=''; return; }
   canvas.style.display='';
@@ -689,6 +704,45 @@ function drawChart(canvas, p){
   const ch = new Chart(canvas.getContext('2d'),
     chartConfig(null, L.x, [base], {valBand: vs ? {kind:vs.vkind, pre:vs.vpre} : null}));
   charts.set(canvas, ch);
+  const lg = document.getElementById('lg-'+p.id); if (lg) lg.style.display='none';
+}
+
+/* 组合图：基准标的与其配对子标的（如 中证A500 + 国金中证A500指数增强A）画在同一张图，
+   二者各自归一化到自身区间起点 0%，共享并集日期轴（缺失日 spanGaps 跨接）。
+   图例（标的名 + 颜色）写在图下方的 .legendline。 */
+const PAIR_COLORS = ['#d0382f', '#2a6bd0', '#8250c4', '#0f8fa8'];
+function buildPairSeries(p, m, color){
+  const s = m.s;
+  const ratio = s.v.map(x => (x/s.v[0] - 1) * 100);
+  const L = lttb(s.d, ratio, 900);
+  return {name:p.name, color, labels:L.x, data:L.y.map(y=>+y.toFixed(3))};
+}
+function drawChartPair(canvas, base, atts){
+  const mb = metrics(base);
+  if (!mb){ canvas.style.display='none'; const n = canvas.parentNode.querySelector('.nodata'); if(n) n.style.display=''; return; }
+  canvas.style.display='';
+  const nd = canvas.parentNode.querySelector('.nodata'); if(nd) nd.style.display='none';
+  const series = [buildPairSeries(base, mb, PAIR_COLORS[0])];
+  atts.forEach((a, i) => {
+    const m = metrics(a);
+    if (m) series.push(buildPairSeries(a, m, PAIR_COLORS[(i+1) % PAIR_COLORS.length]));
+  });
+  // 并集日期轴，缺失处置 null 并 spanGaps
+  const set = new Set(); series.forEach(s => s.labels.forEach(l => set.add(l)));
+  const labels = Array.from(set).sort();
+  const idx = new Map(labels.map((l,i)=>[l,i]));
+  const ds = series.map((s, k) => {
+    const arr = new Array(labels.length).fill(null);
+    s.labels.forEach((l,i) => { const j = idx.get(l); if (j !== undefined) arr[j] = s.data[i]; });
+    return {name:s.name, data:arr, color:s.color, seg:false, width: k===0?1.9:1.6, fill:false};
+  });
+  charts.set(canvas, new Chart(canvas.getContext('2d'), chartConfig(null, labels, ds)));
+  const lg = document.getElementById('lg-'+base.id);
+  if (lg){
+    lg.style.display='';
+    lg.innerHTML = series.map((s,i) =>
+      `<span><i style="background:${s.color}"></i>${s.name}${i===0?'（基准）':''}</span>`).join('');
+  }
 }
 
 /* ============================================================ 多序列标的：中债国债收益率
@@ -842,6 +896,31 @@ function renderStats(p){
     <span class="stat" style="color:var(--muted2)">${m.from} → ${m.to}</span>
     ${m.trimmed ? `<span class="stat" style="color:#a3312a">⚠ 前复权早期股价失真（累计分红超出当期股价），
        起点已顺延至 ${m.cutAt}；执行 <code>python update_data.py --full</code> 取后复权口径可修复</span>` : ''}`;
+  // 配对子标的：在基准信息下新增整行（名称 + 与基准对齐的指标 + ETF 溢价率等不可对齐信息）
+  for (const a of pairedOf(p)){
+    const ma = metrics(a); if (!ma) continue;
+    el.insertAdjacentHTML('beforeend', attachedStatsHTML(a, ma));
+  }
+}
+
+/* 配对子标的的信息行：列结构（收益/回撤/年化/最新/区间）与基准一致以便对齐，
+   另补「溢价率」这类仅 ETF 才有的不可对齐信息。 */
+function attachedStatsHTML(a, m){
+  const unitLatest = (a.unit && a.unit!=='点' && a.unit!=='CNY') ? (' '+a.unit) : '';
+  const lastVal = (a.v[a.v.length-1]).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:4});
+  let html = `<div class="pattach"><div class="pname">${a.name}<span class="pcode">${a.code}</span></div>`;
+  html += `<span class="r ${cls(m.ret*100)}">${fmtPct(m.ret*100)}</span>`;
+  html += `<span class="stat">最大回撤 <b class="${cls(m.mdd*100)}">${fmtPct(m.mdd*100)}</b></span>`;
+  html += `<span class="stat">${isNaN(m.ann)?'—':'年化 <b class="'+cls(m.ann*100)+'">'+fmtPct(m.ann*100)+'</b>'}</span>`;
+  html += `<span class="stat">最新 <b>${lastVal}${unitLatest}</b> <span class="${cls(m.lastChg*100)}">${fmtPct(m.lastChg*100)}</span></span>`;
+  html += `<span class="stat" style="color:var(--muted2)">${m.from} → ${m.to}</span>`;
+  if (a.premNow != null && isFinite(a.premNow)){
+    const pc = a.premNow >= 0 ? 'up' : 'down';
+    html += `<span class="stat">溢价率 <b class="${pc}">${a.premNow>=0?'+':''}${a.premNow.toFixed(2)}%</b>`
+          + `<span style="color:var(--muted2)">${a.premDate||''}</span></span>`;
+  }
+  html += `</div>`;
+  return html;
 }
 
 /* ============================================================ 汇总条 */

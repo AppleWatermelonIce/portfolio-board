@@ -20,12 +20,19 @@
 
     {"id": "SH000510", "name": "中证A500",  "code": "000510.SH", "group": "指数", "src": "em", "secid": "1.000510", "unit": "点"},
     {"id": "022485",   "name": "国金中证A500指数增强A", "code": "022485", "group": "指数", "src": "fund", "secid": "022485", "unit": "元",
-     "note": "A类份额；2024-11-18 成立，跟踪中证A500并做增强"},
+     "note": "A类份额；2024-11-18 成立，跟踪中证A500并做增强",
+     "pair": "SH000510"},
     {"id": "SH000300", "name": "沪深300",   "code": "000300.SH", "group": "指数", "src": "em", "secid": "1.000300", "unit": "点"},
     {"id": "SPX",      "name": "标普500",   "code": "SPX",       "group": "指数", "src": "sina", "secid": ".INX",      "unit": "点",
      "chan": "sina",  "chan2": "auto", "secid2": "100.SPX"},
     {"id": "NDX100",   "name": "纳斯达克100", "code": "NDX",     "group": "指数", "src": "sina", "secid": ".NDX",     "unit": "点",
      "chan": "sina",  "chan2": "auto", "secid2": "100.NDX100"},
+    {"id": "513650", "name": "标普500ETF南方", "code": "513650.SH", "group": "指数", "src": "em", "secid": "1.513650", "unit": "元",
+     "note": "上交所，跟踪标普500；价-净溢价率见下方",
+     "prem": true, "pair": "SPX"},
+    {"id": "159659", "name": "纳斯达克100ETF招商", "code": "159659.SZ", "group": "指数", "src": "em", "secid": "0.159659", "unit": "元",
+     "note": "深交所，跟踪纳斯达克100；价-净溢价率见下方",
+     "prem": true, "pair": "NDX100"},
 
     {"id": "513260", "name": "恒生科技ETF", "code": "513260.SH", "group": "场内ETF", "src": "em", "secid": "1.513260", "unit": "元"},
 

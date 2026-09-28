@@ -627,6 +627,43 @@ def merge(old, dates, vals):
     return ds, [m[d] for d in ds]
 
 
+# ---------------------------------------------------------------- ETF 价-净溢价率
+def fetch_etf_premium(code, dates, vals):
+    """ETF 价-净溢价率 = (二级市价 - 单位净值) / 单位净值 × 100%。
+       单位净值取自天天基金 pingzhongdata 的 Data_netWorthTrend（y 字段，按交易日对齐）。
+       仅用于「信息行」展示最新溢价率（非历史曲线），故只回传最新一个非空值与其日期。"""
+    import re as _re
+    url = f"https://fund.eastmoney.com/pingzhongdata/{code}.js"
+    try:
+        raw = throttled_get(url, referer=f"https://fundf10.eastmoney.com/")
+    except Exception as e:
+        print(f"  [溢价率] {code} 净值抓取失败：{type(e).__name__} {str(e)[:60]}", flush=True)
+        return None
+    txt = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else raw
+    m = _re.search(r"Data_netWorthTrend\s*=\s*(\[.*?\]);", txt, _re.S)
+    if not m:
+        return None
+    try:
+        arr = json.loads(m.group(1))
+    except Exception:
+        return None
+    nav = {}
+    for it in arr:
+        try:
+            d = datetime.fromtimestamp(it["x"] / 1000).strftime("%Y-%m-%d")
+            nav[d] = float(it["y"])
+        except Exception:
+            continue
+    pnow, pdate = None, ""
+    for d, v in zip(dates, vals):
+        n = nav.get(d)
+        if n and n > 0 and v and v > 0:
+            pnow, pdate = round((v - n) / n * 100, 4), d
+    if pnow is None:
+        return None
+    return {"premNow": pnow, "premDate": pdate}
+
+
 # ---------------------------------------------------------------- 单个标的
 def update_one(p, full):
     pid = p["id"]
@@ -673,6 +710,12 @@ def update_one(p, full):
 
     if not need_full and old and p["src"] != "cnyield":
         dates, vals = merge(old, dates, vals)
+
+    # ETF 价-净溢价率（仅场内 ETF 标的、且标记 prem:true 时抓取）
+    if p.get("prem") and dates and vals and len(dates) == len(vals):
+        pr = fetch_etf_premium(p["id"], dates, vals)
+        if pr:
+            extra.update(pr)
 
     today = datetime.now(CN).strftime("%Y-%m-%d")
     obj = {
@@ -742,6 +785,8 @@ def rebuild():
         h["chan2"] = p.get("chan2", ""); h["secid2"] = p.get("secid2", "")
         h["kind"] = p.get("kind", "")
         h["slot"] = p.get("slot", "")
+        h["pair"] = p.get("pair", "")
+        h["prem"] = p.get("prem", False)
         plist.append(h)
     write_payload(prods, plist, tag="  [离线重建]")
     print(f"重建 {len(plist)}/{len(prods)}" + (f"，缺失 {miss}" if miss else ""))
