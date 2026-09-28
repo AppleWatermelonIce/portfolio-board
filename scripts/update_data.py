@@ -765,12 +765,12 @@ def update_one(p, full):
         "id": pid, "name": p["name"], "code": p["code"], "group": p["group"],
         "src": p["src"], "secid": p["secid"], "unit": p.get("unit", ""),
         "note": p.get("note", ""), "chan": channel,
-        "slot": p.get("slot", ""),
         "fulled": today if need_full else old.get("fulled", ""),
         "last": dates[-1] if dates else "",
         "d": dates, "v": vals,
     }
-    obj.update(extra)                  # 多序列标的：y1/y3/y10 + kind
+    obj.update(meta_of(p))             # 前端元信息：slot / pair / prem
+    obj.update(extra)                  # 多序列标的：y1/y3/y10 + kind / 溢价率
     if warn and warn != ("",):
         obj["warn"] = warn
     return pid, obj, None
@@ -781,6 +781,20 @@ def update_one_safe(p, full):
         return update_one(p, full)
     except Exception as e:
         return p["id"], None, f"{p['name']}({p['id']}): {type(e).__name__} {str(e)[:150]}"
+
+# ---------------------------------------------------------------- 前端依赖的元信息
+def meta_of(p):
+    """products.json → 产物中前端要用的元信息字段。
+
+    ⚠ 唯一出口：update_one()（每日增量）与 rebuild()（离线重建）都必须经此透传。
+    历史上两条路径各写一份字段清单，只在一处补了 pair/prem，导致每日自动更新
+    把配对字段从产物里抹掉、线上配对合图静默失效。新增前端字段只需改这里。
+    """
+    return {
+        "slot": p.get("slot", ""),      # 观察仓二级分类（资产槽位）
+        "pair": p.get("pair", ""),      # 配对子标的所挂的基准 id（如 022485 → SH000510）
+        "prem": p.get("prem", False),   # 是否抓取 ETF 场内实时溢价率
+    }
 
 
 # ---------------------------------------------------------------- 主流程
@@ -827,9 +841,7 @@ def rebuild():
         h["chan"] = h.get("chan") or p.get("chan", "")
         h["chan2"] = p.get("chan2", ""); h["secid2"] = p.get("secid2", "")
         h["kind"] = p.get("kind", "")
-        h["slot"] = p.get("slot", "")
-        h["pair"] = p.get("pair", "")
-        h["prem"] = p.get("prem", False)
+        h.update(meta_of(p))               # 前端元信息：slot / pair / prem
         plist.append(h)
     write_payload(prods, plist, tag="  [离线重建]")
     print(f"重建 {len(plist)}/{len(prods)}" + (f"，缺失 {miss}" if miss else ""))
