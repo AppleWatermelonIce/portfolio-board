@@ -392,51 +392,81 @@ function vband(p){
 function valItem(p){ return (VDATA && VDATA.items) ? (VDATA.items[p.id] || null) : null; }
 function valPre(p, kind){ const it = valItem(p); return it ? vprep(it, kind) : null; }
 
+/* 窗口样本的「分位数值」（线性插值）。横向底色的档位阈值由它换算：
+   15/35/70/85 分位对应的 PE/PB 数值 = 四条横向分界线。 */
+function vquant(pre, f){
+  const s = pre.s, n = s.length;
+  if (!n) return null;
+  const x = f * (n - 1), i = Math.floor(x), t = x - i;
+  return (i + 1 < n) ? s[i] * (1 - t) + s[i+1] * t : s[n-1];
+}
+/* 档位阈值（数值域），惰性挂在 pre 上（pre 本身已按 标的|口径|窗口 缓存） */
+function vthresh(pre){
+  if (!pre._tv) pre._tv = (VDATA.bands || []).slice(0, -1).map(b => vquant(pre, b.hi));
+  return pre._tv;
+}
+/* 按 PE/PB 数值落档（与按分位落档等价，阈值来自同一批分位） */
+function vbandVal(pre, v){
+  if (v == null || !VDATA || !VDATA.bands) return null;
+  const tv = vthresh(pre);
+  for (let i = 0; i < tv.length; i++) if (v <= tv[i] + 1e-9) return VDATA.bands[i];
+  return VDATA.bands[VDATA.bands.length - 1];
+}
+/* 左轴（估值数值轴）上下界：包住区间内可见估值，且保证五档都能露出来 */
+function vaxisRange(pre, vmin, vmax){
+  const tv = vthresh(pre);
+  const mn = Math.min(vmin, tv[0]), mx = Math.max(vmax, tv[tv.length-1]);
+  const pad = Math.max((mx - mn) * 0.06, 1e-6);
+  return {min: mn - pad, max: mx + pad};
+}
+
 function hexA(hex, a){
   const h = String(hex).replace('#','');
   const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16);
   return `rgba(${r},${g},${b},${a})`;
 }
 
-/* 背景色带：按估值分位档横向分段着色，画在网格之上、曲线之下 */
+/* 背景分档色带：横向按 PE/PB 数值切分（纯线性映射，不依赖任何坐标轴、不在图上画线或文字）。
+   四条档位阈值由窗口样本的 15/35/70/85 分位换算成数值，于是同一档位在整幅图内连成一片，
+   而不是按日期被切成竖条。净值曲线落入哪个色块即代表该标的处于哪个估值分位档。 */
 const valBandPlugin = {
   id: 'valBand',
   beforeDatasetsDraw(chart, args, opts){
-    if (!opts || !opts.pre || !opts.kind) return;
+    if (!opts || !opts.tv || !opts.tv.length || !isFinite(opts.vmin) || !isFinite(opts.vmax)) return;
     const {ctx, chartArea} = chart;
-    const xs = chart.scales && chart.scales.x;
-    const labels = chart.data.labels;
-    if (!xs || !labels || labels.length < 2) return;
-    const pre = opts.pre, n = labels.length, top = chartArea.top, hgt = chartArea.height;
-    const step = chartArea.width / Math.max(1, n - 1);
-    const half = Math.max((isFinite(step) ? step : 1) * 0.5, 0.8) + 0.5;
+    const top = chartArea.top, bot = chartArea.bottom, h = bot - top;
+    if (h <= 0) return;
+    const bands = VDATA.bands || [];
+    const vmin = opts.vmin, vmax = opts.vmax;
+    const yOf = t => top + (vmax - t) / (vmax - vmin) * h;   // 数值大→上(高估)，数值小→下(低估)
+    const py = opts.tv.map(yOf);
+    const seq = [top].concat(py.slice().reverse(), [bot]);   // 自上而下：高估 → 低估
     ctx.save();
     ctx.beginPath();
-    ctx.rect(chartArea.left, top, chartArea.width, hgt);
+    ctx.rect(chartArea.left, top, chartArea.width, h);
     ctx.clip();
-    let curName = null, curColor = null, x0 = null;
-    const flush = (xEnd) => {
-      if (curName && curColor && x0 != null && xEnd > x0){
-        ctx.fillStyle = hexA(curColor, 0.18);
-        ctx.fillRect(x0, top, Math.max(xEnd - x0, 0.6), hgt);
-      }
-    };
-    for (let i = 0; i < n; i++){
-      const v = vat(pre, labels[i]);
-      const b = vband(vpct(pre, v));
-      const nm = b ? b.name : null;
-      const x = xs.getPixelForValue(labels[i]);
-      if (!isFinite(x)) continue;
-      if (nm !== curName){
-        flush(x - half);
-        curName = nm; curColor = b ? b.color : null; x0 = x - half;
-      }
+    for (let k = 0; k < seq.length - 1; k++){
+      const b = bands[bands.length - 1 - k];
+      if (!b) continue;
+      const y0 = Math.max(top, Math.min(bot, seq[k]));
+      const y1 = Math.max(top, Math.min(bot, seq[k+1]));
+      if (y1 - y0 <= 0) continue;
+      ctx.fillStyle = hexA(b.color, 0.17);
+      ctx.fillRect(chartArea.left, y0, chartArea.width, y1 - y0);
     }
-    flush(chartArea.right);
     ctx.restore();
   }
 };
 if (window.Chart) Chart.register(valBandPlugin);
+
+/* 估值色带配置：档位阈值数值域 + 可见区间上下界（线性映射用，无需坐标轴） */
+function valBandFor(pre, vval){
+  const vals = (vval || []).filter(x => x != null && isFinite(x));
+  if (!vals.length) return null;
+  const vmin = Math.min.apply(null, vals), vmax = Math.max.apply(null, vals);
+  const rg = vaxisRange(pre, vmin, vmax);
+  return {tv: vthresh(pre), vmin: rg.min, vmax: rg.max};
+}
 
 /* 卡片标题栏的分位徽章 */
 function renderValBadge(p){
@@ -483,10 +513,13 @@ function renderValBar(){
     renderAll();
   });
 
-  $('#valLegend').innerHTML = on ? (VDATA.bands || []).map((b,i) => {
+  // 颜色说明固定展示（不随开关隐藏），口径写死避免歧义
+  $('#valLegend').innerHTML = (VDATA.bands || []).map((b,i) => {
     const lo = i ? Math.round(VDATA.bands[i-1].hi*100) : 0;
     return `<span><i style="background:${b.color}"></i>${b.name} ${lo}–${Math.round(b.hi*100)}%</span>`;
-  }).join('') : '';
+  }).join('')
+  + `<span style="color:var(--muted2)">· 背景五档底色即估值分位档，曲线落入哪一色块即代表对应分位`
+  + (on ? '' : '（需先选 PE / PB）') + `</span>`;
 
   const names = Object.values(VDATA.items).map(x => x.name).join('、');
   if (!on){ $('#valNote').textContent = `可选：${names}`; return; }
@@ -512,6 +545,7 @@ function renderValBar(){
   if (stale.length) srcTxt += ` · ⚠ 估值序列已陈旧：${stale.join('、')}，需重跑 fetch_valuation.py`;
   $('#valNote').textContent =
     `分位样本：近 ${state.valWin} 年${sh.length ? '（' + sh.join('、') + '，按全部可得数据算）' : ''}`
+    + ` · 背景五档底色 = 该样本 15/35/70/85 分位档（曲线落入哪个色块即对应分位）`
     + ` · 覆盖 ${names} · ${srcTxt} · ${VDATA.updated || '—'}`;
 }
 
@@ -611,6 +645,16 @@ function pairedOf(p){
 
 /* ============================================================ 图表 */
 function chartConfig(idxs, labels, seriesList, opts){
+  opts = opts || {};
+  const scales = {
+    x:{ grid:{display:false}, border:{color:'#e5e5e9'},
+        ticks:{ maxTicksLimit:8, autoSkip:true, color:'#9a9aa1', font:{size:10.5}, maxRotation:0 } },
+    y:{ position:'right',
+        grid:{ color:(c)=> c.tick.value===0 ? '#c8c8cf' : '#f1f1f3' },
+        border:{display:false},
+        ticks:{ callback:v=>v.toFixed(opts.yDec||0)+'%', color:'#9a9aa1', font:{size:10.5} } }
+  };
+  // 估值底色自包含线性映射，不再绘制左侧数值轴（净值落入哪个色块即代表对应分位档）
   return {
     type:'line',
     data:{
@@ -640,7 +684,7 @@ function chartConfig(idxs, labels, seriesList, opts){
       interaction:{mode:'index', intersect:false},
       plugins:{
         legend:{display:false},
-        valBand: (opts && opts.valBand) ? opts.valBand : {},
+        valBand: opts.valBand || {},
         tooltip:{
           backgroundColor:'rgba(22,22,26,.94)', padding:9, cornerRadius:7,
           titleColor:'#fff', bodyColor:'#e8e8ea', titleFont:{size:12}, bodyFont:{size:12},
@@ -650,6 +694,7 @@ function chartConfig(idxs, labels, seriesList, opts){
             label: c => {
               const i = c.dataIndex;
               const s = seriesList[c.datasetIndex];
+              if (!s) return '';
               let t = (s.name ? s.name + '  ' : '') + (c.parsed.y>=0?'+':'') + c.parsed.y.toFixed(2) + '%';
               if (s.raw) t += '   净值 ' + s.raw[i].toFixed(4);
               if (s.vval && s.vval[i] != null){
@@ -662,14 +707,7 @@ function chartConfig(idxs, labels, seriesList, opts){
           }
         }
       },
-      scales:{
-        x:{ grid:{display:false}, border:{color:'#e5e5e9'},
-            ticks:{ maxTicksLimit:8, autoSkip:true, color:'#9a9aa1', font:{size:10.5}, maxRotation:0 } },
-        y:{ position:'right',
-            grid:{ color:(c)=> c.tick.value===0 ? '#c8c8cf' : '#f1f1f3' },
-            border:{display:false},
-            ticks:{ callback:v=>v.toFixed((opts&&opts.yDec)||0)+'%', color:'#9a9aa1', font:{size:10.5} } }
-      }
+      scales
     }
   };
 }
@@ -680,6 +718,28 @@ function valSeries(p, dates){
   const pre = valPre(p, state.valKind);
   if (!pre || pre.d.length < 30) return null;
   return {vkind: state.valKind.toUpperCase(), vpre: pre, vval: dates.map(d => vat(pre, d))};
+}
+
+/* 组装估值叠加层：横向分档色带（自包含线性映射，无额外坐标轴）。
+   可见区间内一个估值点都没有时返回 null（如区间整体落在估值序列之前）。
+   注：不再额外画 PE/PB 曲线——收益曲线本身已落在对应档位里，
+   多一条估值线只会与红涨绿跌的收益线互相干扰。 */
+function valOverlay(p, labels){
+  const vs = valSeries(p, labels);
+  if (!vs) return null;
+  const band = valBandFor(vs.vpre, vs.vval);
+  if (!band) return null;
+  return {vs, vband: band};
+}
+/* 卡片下方图例里的估值项（当前档位说明） */
+function valLegendHTML(vo){
+  if (!vo) return '';
+  const pre = vo.vs.vpre;
+  const v = pre.v[pre.v.length-1], pct = vpct(pre, v), b = vband(pct);
+  const tv = vthresh(pre).map(t => t.toFixed(2)).join(' / ');
+  return `<span title="背景五档底色 = 近 ${pre.win} 年样本 15/35/70/85 分位档；曲线落入哪个色块即代表该标的处于对应估值分位">`
+    + `<i style="background:${b ? b.color : '#c9c9d0'};width:9px;height:9px;border-radius:2px"></i>`
+    + `${vo.vs.vkind} ${v.toFixed(2)} · 分位 ${Math.round(pct*100)}%${b?' '+b.name:''}</span>`;
 }
 
 function drawChart(canvas, p){
@@ -696,15 +756,21 @@ function drawChart(canvas, p){
   const s = m.s;
   const ratio = s.v.map(x => (x/s.v[0] - 1) * 100);
   const L = lttb(s.d, ratio, 900);
-  const vs = valSeries(p, L.x);
+  const vo = valOverlay(p, L.x);
   const base = {name:p.name, data:L.y.map(y=>+y.toFixed(3)),
     raw:L.y.map((_,i)=>s.v[Math.round(i*(s.v.length-1)/Math.max(1,L.y.length-1))]),
-    color:UP, fill:!vs, seg:true};
-  if (vs) Object.assign(base, vs);
+    color:UP, fill:!vo, seg:true};
+  // 悬浮提示里仍带出该日 PE/PB 与分位（不画线，只在 tooltip 与徽章里体现）
+  if (vo) Object.assign(base, {vkind:vo.vs.vkind, vpre:vo.vs.vpre, vval:vo.vs.vval});
+  const series = [base];
   const ch = new Chart(canvas.getContext('2d'),
-    chartConfig(null, L.x, [base], {valBand: vs ? {kind:vs.vkind, pre:vs.vpre} : null}));
+    chartConfig(null, L.x, series, {valBand: vo ? vo.vband : null}));
   charts.set(canvas, ch);
-  const lg = document.getElementById('lg-'+p.id); if (lg) lg.style.display='none';
+  const lg = document.getElementById('lg-'+p.id);
+  if (lg){
+    if (vo){ lg.style.display=''; lg.innerHTML = valLegendHTML(vo); }
+    else lg.style.display='none';
+  }
 }
 
 /* 组合图：基准标的与其配对子标的（如 中证A500 + 国金中证A500指数增强A）画在同一张图，
@@ -736,12 +802,19 @@ function drawChartPair(canvas, base, atts){
     s.labels.forEach((l,i) => { const j = idx.get(l); if (j !== undefined) arr[j] = s.data[i]; });
     return {name:s.name, data:arr, color:s.color, seg:false, width: k===0?1.9:1.6, fill:false};
   });
-  charts.set(canvas, new Chart(canvas.getContext('2d'), chartConfig(null, labels, ds)));
+  const vo = valOverlay(base, labels);
+  if (vo){
+    const s0 = ds[0];
+    s0.vkind = vo.vs.vkind; s0.vpre = vo.vs.vpre; s0.vval = vo.vs.vval;
+  }
+  charts.set(canvas, new Chart(canvas.getContext('2d'),
+    chartConfig(null, labels, ds, {valBand: vo ? vo.vband : null})));
   const lg = document.getElementById('lg-'+base.id);
   if (lg){
     lg.style.display='';
     lg.innerHTML = series.map((s,i) =>
-      `<span><i style="background:${s.color}"></i>${s.name}${i===0?'（基准）':''}</span>`).join('');
+      `<span><i style="background:${s.color}"></i>${s.name}${i===0?'（基准）':''}</span>`).join('')
+      + valLegendHTML(vo);
   }
 }
 
@@ -1102,8 +1175,9 @@ function zoom(p){
     const vs = valSeries(p, L.x);
     const base = {name:p.name, data:L.y.map(y=>+y.toFixed(3)), raw:s.v, color:UP, fill:!vs, seg:true};
     if (vs) Object.assign(base, vs);
+    const vband = vs ? valBandFor(vs.vpre, vs.vval) : null;
     charts.set(cv, new Chart(cv.getContext('2d'),
-      chartConfig(null, L.x, [base], {valBand: vs ? {kind:vs.vkind, pre:vs.vpre} : null})));
+      chartConfig(null, L.x, [base], {valBand: vband})));
     let vline = '';
     const vpre = (state.valKind !== 'off') ? valPre(p, state.valKind) : null;
     if (vpre && vpre.d.length){
