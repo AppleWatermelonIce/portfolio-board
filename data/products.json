@@ -37,6 +37,17 @@
     {"id": "025776", "name": "鹏华启航量化选股混合发起式","code": "025776", "group": "开放式基金", "src": "fund", "secid": "025776", "unit": "元"},
     {"id": "320016", "name": "诺安多策略混合A",          "code": "320016", "group": "开放式基金", "src": "fund", "secid": "320016", "unit": "元"},
 
+    {"id": "006670", "name": "广发景秀纯债A",                    "code": "006670", "group": "债券基金", "src": "fund", "secid": "006670", "unit": "元"},
+    {"id": "004102", "name": "中信保诚稳悦债券A",                "code": "004102", "group": "债券基金", "src": "fund", "secid": "004102", "unit": "元"},
+    {"id": "006242", "name": "宝盈盈润纯债债券A",                "code": "006242", "group": "债券基金", "src": "fund", "secid": "006242", "unit": "元"},
+    {"id": "002065", "name": "景顺长城景盛双息收益债券A",        "code": "002065", "group": "债券基金", "src": "fund", "secid": "002065", "unit": "元"},
+    {"id": "007194", "name": "长城短债A",                        "code": "007194", "group": "债券基金", "src": "fund", "secid": "007194", "unit": "元"},
+    {"id": "006596", "name": "国泰聚禾纯债债券A",                "code": "006596", "group": "债券基金", "src": "fund", "secid": "006596", "unit": "元"},
+    {"id": "008646", "name": "天弘增利短债发起A",                "code": "008646", "group": "债券基金", "src": "fund", "secid": "008646", "unit": "元"},
+    {"id": "001497", "name": "大成月添利一个月滚动持有中短债E",  "code": "001497", "group": "债券基金", "src": "fund", "secid": "001497", "unit": "元"},
+    {"id": "016748", "name": "申万菱信稳鑫60天滚动持有中短债债券A", "code": "016748", "group": "债券基金", "src": "fund", "secid": "016748", "unit": "元"},
+    {"id": "020810", "name": "泰康悦享60天持有期债券E",          "code": "020810", "group": "债券基金", "src": "fund", "secid": "020810", "unit": "元"},
+
     {"id": "006327", "name": "易方达中概互联ETF联接(QDII)A", "code": "006327", "group": "QDII基金", "src": "fund", "secid": "006327", "unit": "元"},
     {"id": "006328", "name": "易方达中概互联ETF联接(QDII)C", "code": "006328", "group": "QDII基金", "src": "fund", "secid": "006328", "unit": "元"},
     {"id": "025787", "name": "大成港股恒信混合(QDII)",       "code": "025787", "group": "QDII基金", "src": "fund", "secid": "025787", "unit": "元"},
