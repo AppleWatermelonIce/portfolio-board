@@ -97,6 +97,11 @@ input:focus,select:focus{border-color:var(--accent)}
   padding:14px 16px 12px;min-width:0;
 }
 .card.wide{grid-column:1/-1}
+/* 槽位小标题（观察仓内二级分类）：独占一行，标题右侧拉一条分隔线 */
+.slothead{grid-column:1/-1;display:flex;align-items:center;gap:9px;margin:14px 0 -6px}
+.slothead:first-child{margin-top:0}
+.slothead span{font-size:12.5px;font-weight:650;color:var(--text);letter-spacing:-.1px}
+.slothead::after{content:"";flex:1;height:1px;background:var(--line)}
 .chead{display:flex;align-items:flex-start;gap:10px;margin-bottom:2px}
 .cname{font-size:14.5px;font-weight:620;letter-spacing:-.1px;min-width:0}
 .cmeta{font-size:11.5px;color:var(--muted2);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -749,7 +754,7 @@ function cardHTML(p, i){
     <div class="chead">
       <div style="min-width:0">
         <div class="cname">${p.name}<span id="vb-${p.id}"></span></div>
-        <div class="cmeta">${p.code} · ${p.group}${p.note?' · '+p.note:''}</div>
+        <div class="cmeta">${p.code} · ${p.slot || p.group}${p.note?' · '+p.note:''}</div>
       </div>
       <div class="cact">
         <span class="rtb" id="rt-${p.id}"></span>
@@ -862,7 +867,7 @@ function renderStrip(list){
 /* ============================================================ 对比图 */
 function renderCompare(){
   // 国债收益率是利率水平，归一化成「涨跌%」后与净值曲线混在一起会严重误导，故排除
-  const list = visibleProducts().filter(p => p.kind !== 'yield');
+  const list = orderBySlot(visibleProducts()).filter(p => p.kind !== 'yield');
   const host = $('#grid');
   host.innerHTML = `<div class="card wide" id="cmpCard">
       <div class="chead"><div>
@@ -905,15 +910,43 @@ function renderCompare(){
   $('#cnt').textContent = '';
 }
 
+/* ---------------------------------------------------------- 槽位（二级分类）
+   观察仓按「资产槽位」归类：日本 / 中国离岸港股 / 欧洲 / 台湾 / 韩国 / ASEAN /
+   中国创新药 / 电网电气化 / 全球医疗生科。排序与标题都只依赖 products.json 的 slot 字段，
+   新增槽位零代码（未列出的槽位按末尾处理）。 */
+const SLOT_ORDER = ['日本','中国A股Beta','中国A股Alpha','中国离岸/港股','欧洲','台湾','韩国','ASEAN',
+                    '澳大利亚','中国创新药','电网/电气化','全球医疗/生科'];
+function orderBySlot(list){
+  if (!list.some(p => p.slot)) return list;
+  const key = p => { const i = SLOT_ORDER.indexOf(p.slot); return i < 0 ? SLOT_ORDER.length : i; };
+  return list.map((p, i) => ({p, i}))
+    .sort((a, b) => {
+      const sa = !!a.p.slot, sb = !!b.p.slot;
+      if (!sa && !sb) return a.i - b.i;                 // 无槽位的保持原有顺序在前
+      if (!sa) return -1;
+      if (!sb) return 1;
+      return key(a.p) - key(b.p) || a.i - b.i;          // 同槽位内保持在清单里的先后
+    })
+    .map(x => x.p);
+}
+function gridHTML(list){
+  let out = '', cur = Symbol('none');
+  for (const p of list){
+    if (p.slot && p.slot !== cur){ cur = p.slot; out += `<div class="slothead"><span>${p.slot}</span></div>`; }
+    out += cardHTML(p);
+  }
+  return out;
+}
+
 /* ============================================================ 主渲染 */
 let io = null;
 function renderGrid(){
-  const list = visibleProducts();
+  const list = orderBySlot(visibleProducts());
   const host = $('#grid');
   $('#cnt').textContent = `显示 ${list.length} / ${DATA.products.length}`;
   if (!list.length){ host.innerHTML = `<div class="empty">没有匹配的标的</div>`; $('#strip').innerHTML=''; return; }
   renderStrip(list);
-  host.innerHTML = list.map(cardHTML).join('');
+  host.innerHTML = gridHTML(list);
   if (io) io.disconnect();
   io = new IntersectionObserver(ents => {
     ents.forEach(e => {

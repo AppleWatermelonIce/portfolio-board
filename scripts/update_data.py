@@ -679,6 +679,7 @@ def update_one(p, full):
         "id": pid, "name": p["name"], "code": p["code"], "group": p["group"],
         "src": p["src"], "secid": p["secid"], "unit": p.get("unit", ""),
         "note": p.get("note", ""), "chan": channel,
+        "slot": p.get("slot", ""),
         "fulled": today if need_full else old.get("fulled", ""),
         "last": dates[-1] if dates else "",
         "d": dates, "v": vals,
@@ -740,6 +741,7 @@ def rebuild():
         h["chan"] = h.get("chan") or p.get("chan", "")
         h["chan2"] = p.get("chan2", ""); h["secid2"] = p.get("secid2", "")
         h["kind"] = p.get("kind", "")
+        h["slot"] = p.get("slot", "")
         plist.append(h)
     write_payload(prods, plist, tag="  [离线重建]")
     print(f"重建 {len(plist)}/{len(prods)}" + (f"，缺失 {miss}" if miss else ""))
