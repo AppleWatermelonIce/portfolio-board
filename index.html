@@ -88,6 +88,14 @@ input:focus,select:focus{border-color:var(--accent)}
 .sc{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:9px 11px}
 .sc .n{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sc .v{font-size:16px;font-weight:650;margin-top:2px;letter-spacing:-.3px}
+/* 收益率旁的小字：最新收盘交易日的当日涨跌 */
+.sc .v .dv{font-size:11px;font-weight:500;margin-left:5px;letter-spacing:0}
+/* 榜单最前面的排序切换（区间 / 当日） */
+.seg{display:flex;gap:4px;margin-top:5px}
+.sbtn{border:1px solid var(--line);background:var(--chip);color:var(--muted);font-size:11.5px;
+  padding:2px 9px;border-radius:6px;cursor:pointer;font-family:inherit;transition:.12s}
+.sbtn:hover{color:var(--text)}
+.sbtn.on{background:var(--accent-soft);border-color:#bcd3f2;color:var(--accent);font-weight:600}
 .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--muted)}
 
 /* ---------- grid ---------- */
@@ -326,6 +334,7 @@ let state = {
   since: localStorage.getItem(LS.since) || '',
   hidden: new Set(JSON.parse(localStorage.getItem(LS.hidden) || '[]')),
   compare: false,
+  stripSort: 'ret',          // 榜单排序依据：'ret'=区间收益、'day'=最新收盘交易日当日涨跌
 };
 const charts = new Map();
 
@@ -995,6 +1004,17 @@ function latestHTML(p, m){
   return `最新 <b>${lastVal}${unitTxt}</b> <span class="${cls(m.lastChg*100)}">${fmtPct(m.lastChg*100)}</span>`;
 }
 
+/* 「当日涨跌」＝最新一个【已收盘】交易日的日涨跌（收盘口径，与 latestHTML 同源）
+   场内证券：收盘后用快照自带涨跌幅（＝当日）；盘中用产物末日涨跌（＝上一交易日）
+   商品/汇率、场外基金、港售基金：产物末日涨跌（日频收盘口径） */
+function dayChgOf(p, m){
+  const info = (window.__rtData || {})[p.id];
+  const mk = marketOf(p);
+  if (mk && info && info.price != null && isFinite(info.price)
+      && !inSessionNow(mk) && info.chg != null && isFinite(info.chg)) return info.chg;
+  return (m && isFinite(m.lastChg)) ? m.lastChg * 100 : null;
+}
+
 /* 按 id 取回标的（供 __rtPaint 判定市场与时区），只建一次索引 */
 let _pById = null;
 function productById(id){
@@ -1105,24 +1125,38 @@ function attachedStatsHTML(a, m){
   return html;
 }
 
-/* ============================================================ 汇总条 */
+/* ============================================================ 汇总条
+   列出当前分组【全部】标的（排除债券收益率：利率是水平值不是收益，参与排行语义错误），
+   按「区间收益」或「最新收盘交易日当日涨跌」降序排列；
+   每项＝名称 + 区间收益 + 当日涨跌小字，最前面一项是排序切换按钮（区间 / 当日）。 */
 function renderStrip(list){
-  // 国债收益率是利率水平，不是收益，参与涨幅排行会造成语义错误，故排除
-  const rows = list.filter(p=>p.kind!=='yield').map(p => ({p, m:metrics(p)})).filter(x=>x.m)
-                   .sort((a,b)=>b.m.ret-a.m.ret);
-  if (!rows.length){ $('#strip').innerHTML=''; return; }
-  // 前 6（表现最好）+ 后 3（表现最差）；同一标的绝不重复出现。
-  // 当有效标的数较少（如某小组 / 某区间）时首尾会重叠，必须按 id 去重，
-  // 否则会出现「同一个标的 -X%」在条里出现两次的情况。
-  const seen = new Set();
-  const pick = [];
-  for (const r of rows.slice(0, 6))            if (!seen.has(r.p.id)) { seen.add(r.p.id); pick.push(r); }
-  for (const r of rows.slice(-3).reverse())   if (!seen.has(r.p.id)) { seen.add(r.p.id); pick.push(r); }
-  const card = r => `<div class="sc">
-      <div class="n">${r.p.name}</div>
-      <div class="v ${cls(r.m.ret*100)}">${fmtPct(r.m.ret*100)}</div>
+  const host = $('#strip');
+  const rows = list.filter(p=>p.kind!=='yield').map(p => ({p, m:metrics(p)})).filter(x=>x.m);
+  if (!rows.length){ host.innerHTML=''; return; }
+  const byDay = state.stripSort === 'day';
+  const valOf = r => { const v = byDay ? dayChgOf(r.p, r.m) : r.m.ret * 100; return isFinite(v) ? v : -Infinity; };
+  rows.sort((a,b) => valOf(b) - valOf(a));
+  const seg = `<div class="sc">
+      <div class="n">排序</div>
+      <div class="seg">
+        <button class="sbtn${byDay?'':' on'}" data-s="ret">区间</button>
+        <button class="sbtn${byDay?' on':''}" data-s="day">当日</button>
+      </div>
     </div>`;
-  $('#strip').innerHTML = pick.map(card).join('');
+  const card = r => {
+    const ret = r.m.ret * 100, d = dayChgOf(r.p, r.m);
+    const sub = isFinite(d) ? `<span class="dv ${cls(d)}">${fmtPct(d)}</span>` : '';
+    return `<div class="sc">
+      <div class="n">${r.p.name}</div>
+      <div class="v ${cls(ret)}">${fmtPct(ret)}${sub}</div>
+    </div>`;
+  };
+  host.innerHTML = seg + rows.map(card).join('');
+  host.querySelectorAll('.sbtn').forEach(b => b.onclick = () => {
+    if (state.stripSort === b.dataset.s) return;
+    state.stripSort = b.dataset.s;
+    renderStrip(list);
+  });
 }
 
 /* ============================================================ 对比图 */
