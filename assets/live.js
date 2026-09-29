@@ -170,9 +170,9 @@ async function pzGet(code) {
 /** 取 [起点, 今天] 的汇率序列；起点按本地末点回退若干天，保证有重叠可校验 */
 async function frRange(pair, sinceDate) {
   const [b, q] = pair.split('-');
-  const start = sinceDate
-    ? new Date(Date.parse(sinceDate) - 12 * 864e5).toISOString().slice(0, 10)
-    : new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+  // 固定拉最近 30 天：本地缓存可能让 p.d 末日异常（如只含未来日期），
+  // 用足够长的滑动窗口保证与本地序列有重叠，减少「无重叠」误报。
+  const start = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
   const end = new Date().toISOString().slice(0, 10);
   // ⚠ 必须直连 api.frankfurter.dev：旧域名 .app 会 301 过来，
   //   而 301 响应不带 ACAO，浏览器会被 CORS 拦下（Python 能跟随跳转，浏览器不行）
@@ -227,8 +227,13 @@ function parseTx(str){
   let chg = parseFloat(f[32]);                       // 腾讯自带涨跌幅%，直接用
   if (!(prev > 0) || !isFinite(chg)) chg = (price - prev) / prev * 100;
   if (!isFinite(chg)) return null;
+  // 场内 ETF 溢价率：78=参考净值(IOPV)，优先自算；否则取 77=接口返回的溢价率%
+  let prem = null;
+  const iopv = parseFloat(f[78]);
+  if (iopv > 0) prem = (price - iopv) / iopv * 100;
+  else { const p77 = parseFloat(f[77]); if (isFinite(p77)) prem = p77; }
   // prev = 前收，供 index.html 的「最新」在【盘中】取用（盘中「最新」应是最近收盘价，不是实时价）
-  return {price, chg, prev: (prev > 0 ? prev : null), ts: (f[30] || '').replace(/\//g,'-')};
+  return {price, chg, prem, prev: (prev > 0 ? prev : null), ts: (f[30] || '').replace(/\//g,'-')};
 }
 /* 报价精度：按【交易品种】定，不能一律 2 位。
      场内基金/ETF 最小报价单位是 0.001 元（深市 15x/16x/18x、沪市 5xx），
@@ -305,7 +310,8 @@ async function fetchSpotRealtime(){
   for (const p of fxList){
     const info = fx ? {price: fx.cny, chg: null, dp: 4, tag: '汇', ts: fx.ts, tz: fx.tz} : null;
     RT.data[p.id] = info;
-    if (window.__rtPaint) window.__rtPaint(p.id, info);
+    // 失败时不调 __rtPaint(p.id, null)，避免把已显示的有效角标清空；index.html 会保持最近一次成功值。
+    if (window.__rtPaint && info) window.__rtPaint(p.id, info);
   }
   if (goldList.length){
     let rate = fx ? fx.cny : null;
@@ -317,10 +323,12 @@ async function fetchSpotRealtime(){
         const info = {price: cnyPerGram, chg: null, dp: 2, tag: '现', ts: g.ts, tz: g.tz};
         for (const p of goldList){ RT.data[p.id] = info; if (window.__rtPaint) window.__rtPaint(p.id, info); }
       } else {
-        for (const p of goldList){ RT.data[p.id] = null; if (window.__rtPaint) window.__rtPaint(p.id, null); }
+        // 取数失败：清空缓存数据，但不再调 __rtPaint(p.id, null) 把角标强制清空，
+        // 让 index.html 的 __rtPaint 待绘队列保持上一次有效显示（spot 数据仅展示，不并入曲线）。
+        for (const p of goldList){ RT.data[p.id] = null; }
       }
     } catch (e) {
-      for (const p of goldList){ RT.data[p.id] = null; if (window.__rtPaint) window.__rtPaint(p.id, null); }
+      for (const p of goldList){ RT.data[p.id] = null; }
     }
   }
 }
@@ -528,7 +536,7 @@ async function refresh(force) {
     paintHead(rec);
     const t = bjStamp();
     if (errs.length)
-      setStat(`⟳ 已更新 ${t} · ${touched} 个有变动 · ${errs.length} 项失败`, 'warn');
+      setStat(`⟳ 已更新 ${t} · ${touched} 个有变动 · ${errs.length} 项失败：${errs.join('；')}`, 'warn');
     else if (touched)
       setStat(`⟳ 已更新 ${t} · ${touched} 个标的有新数据`, 'ok');
     else

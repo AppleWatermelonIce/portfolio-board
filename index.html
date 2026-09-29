@@ -90,6 +90,9 @@ input:focus,select:focus{border-color:var(--accent)}
 .sc .v{font-size:16px;font-weight:650;margin-top:2px;letter-spacing:-.3px}
 /* 收益率旁的小字：最新收盘交易日的当日涨跌 */
 .sc .v .dv{font-size:11px;font-weight:500;margin-left:5px;letter-spacing:0}
+/* 榜单条目可点击：跳转到下方对应卡片 */
+.sc[data-id]{cursor:pointer}
+.sc[data-id]:hover{border-color:var(--accent)}
 /* 榜单最前面的排序切换（区间 / 当日） */
 .seg{display:flex;gap:4px;margin-top:5px}
 .sbtn{border:1px solid var(--line);background:var(--chip);color:var(--muted);font-size:11.5px;
@@ -303,7 +306,7 @@ const daysBetween = (a,b) => (parseDate(b)-parseDate(a))/86400000;
 /* LTTB 降采样，保形 */
 function lttb(xs, ys, thr){
   const n = xs.length;
-  if (n <= thr) return {x:xs, y:ys};
+  if (n <= thr) return {x:xs, y:ys, idx: xs.map((_,i)=>i)};
   const out = [0];
   const every = (n-2)/(thr-2);
   let a = 0;
@@ -322,7 +325,7 @@ function lttb(xs, ys, thr){
     out.push(best); a = best;
   }
   out.push(n-1);
-  return {x: out.map(i=>xs[i]), y: out.map(i=>ys[i])};
+  return {x: out.map(i=>xs[i]), y: out.map(i=>ys[i]), idx: out};
 }
 
 /* ============================================================ 状态 */
@@ -334,7 +337,7 @@ let state = {
   since: localStorage.getItem(LS.since) || '',
   hidden: new Set(JSON.parse(localStorage.getItem(LS.hidden) || '[]')),
   compare: false,
-  stripSort: 'ret',          // 榜单排序依据：'ret'=区间收益、'day'=最新收盘交易日当日涨跌
+  stripSort: 'ret',          // 榜单排序依据：'ret'=区间收益、'day'=最新收盘交易日当日涨跌、'pos'=当前价在区间高低点间的相对位置
 };
 const charts = new Map();
 
@@ -724,7 +727,7 @@ function chartConfig(idxs, labels, seriesList, opts){
               const s = seriesList[c.datasetIndex];
               if (!s) return '';
               let t = (s.name ? s.name + '  ' : '') + (c.parsed.y>=0?'+':'') + c.parsed.y.toFixed(2) + '%';
-              if (s.raw) t += '   净值 ' + s.raw[i].toFixed(4);
+              if (s.raw && s.raw[i] != null) t += '   净值 ' + s.raw[i].toFixed(4);
               if (s.vval && s.vval[i] != null){
                 const p = vpct(s.vpre, s.vval[i]);
                 t += `   ${s.vkind||''} ${s.vval[i].toFixed(2)}`;
@@ -775,7 +778,9 @@ function drawChart(canvas, p){
   const L = lttb(s.d, ratio, 900);
   const vo = valOverlay(p, L.x);
   const base = {name:p.name, data:L.y.map(y=>+y.toFixed(3)),
-    raw:L.y.map((_,i)=>s.v[Math.round(i*(s.v.length-1)/Math.max(1,L.y.length-1))]),
+    // 悬浮「净值」必须取该点【真实】的原始值：LTTB 是非均匀采样，
+    // 用「下标线性插值」回推原序列会把日期错位（长历史标的可见巨额偏差，如格力 54.98 vs 真值 6254.84）。
+    raw:L.idx.map(i=>s.v[i]),
     color:UP, fill:!vo, seg:true};
   // 悬浮提示里仍带出该日 PE/PB 与分位（不画线，只在 tooltip 与徽章里体现）
   if (vo) Object.assign(base, {vkind:vo.vs.vkind, vpre:vo.vs.vpre, vval:vo.vs.vval});
@@ -796,7 +801,7 @@ function buildPairSeries(p, m, color){
   const s = m.s;
   const ratio = s.v.map(x => (x/s.v[0] - 1) * 100);
   const L = lttb(s.d, ratio, 900);
-  return {name:p.name, color, labels:L.x, data:L.y.map(y=>+y.toFixed(3))};
+  return {name:p.name, color, labels:L.x, data:L.y.map(y=>+y.toFixed(3)), raw:L.idx.map(i=>+s.v[i].toFixed(4))};
 }
 function drawChartPair(canvas, base, atts){
   const mb = metrics(base);
@@ -814,8 +819,12 @@ function drawChartPair(canvas, base, atts){
   const idx = new Map(labels.map((l,i)=>[l,i]));
   const ds = series.map((s, k) => {
     const arr = new Array(labels.length).fill(null);
-    s.labels.forEach((l,i) => { const j = idx.get(l); if (j !== undefined) arr[j] = s.data[i]; });
-    return {name:s.name, data:arr, color:s.color, seg:false, width: k===0?1.9:1.6, fill:false};
+    const rawArr = new Array(labels.length).fill(null);
+    s.labels.forEach((l,i) => {
+      const j = idx.get(l);
+      if (j !== undefined){ arr[j] = s.data[i]; rawArr[j] = s.raw[i]; }
+    });
+    return {name:s.name, data:arr, raw:rawArr, color:s.color, seg:false, width: k===0?1.9:1.6, fill:false};
   });
   const vo = valOverlay(base, labels);
   if (vo){
@@ -862,10 +871,13 @@ function yieldSeries(m){
 
 function yieldDatasets(m){
   const ss = yieldSeries(m);
-  const labels = lttb(m.d, m.y1, 900).x;   // lttb 对同一 x 输入给出同一套索引，三线共享
+  // 三条曲线必须共用【同一套】采样下标：LTTB 是依 y 值选点的，
+  // 三条不同期限各自跑一次会得到三套不同的下标，x 轴标签却只有一套 ⇒ 点位与日期整体错位。
+  const ix = lttb(m.d, m.y1, 900).idx;
+  const labels = ix.map(i => m.d[i]);
   return {labels, ss, ds: ss.map(s => {
-    const L = lttb(m.d, s.ys, 900);
-    return {name:s.name, data:L.y, raw:L.y, color:s.color, fill:false, seg:false};
+    const ys = ix.map(i => s.ys[i]);
+    return {name:s.name, data:ys, raw:ys, color:s.color, fill:false, seg:false};
   })};
 }
 
@@ -1015,6 +1027,18 @@ function dayChgOf(p, m){
   return (m && isFinite(m.lastChg)) ? m.lastChg * 100 : null;
 }
 
+/* 「价位」＝当前价在区间最高价/最低价之间的相对位置，0=贴底，1=触顶
+   当前价取与区间序列同口径的产物末值（m.s.v 为后复权/复权净值口径），
+   避免用盘中实时市价与后复权序列混算导致超范围或负值。 */
+function positionOf(p, m){
+  const s = m && m.s;
+  if (!s || !s.v || s.v.length < 2) return null;
+  const price = +s.v[s.v.length - 1];
+  const min = Math.min(...s.v), max = Math.max(...s.v);
+  if (!(max > min) || !(price > 0)) return null;
+  return (price - min) / (max - min);
+}
+
 /* 按 id 取回标的（供 __rtPaint 判定市场与时区），只建一次索引 */
 let _pById = null;
 function productById(id){
@@ -1025,6 +1049,7 @@ function productById(id){
   return _pById.get(id) || null;
 }
 
+const RTPENDING = {};   // 实时角标待绘队列：id -> info（解决 fetchRealtime 与 renderGrid 的时序竞态）
 window.__rtPaint = function(id, info){
   // 同步卡片里的「最新」块（它取的是收盘价：盘中→前收、收盘后→当日收盘；见 latestHTML）
   // 角标涨跌：场内证券用行情源自带涨跌幅；商品/汇率（现货黄金、ECB 汇率）源不提供前收，
@@ -1032,14 +1057,23 @@ window.__rtPaint = function(id, info){
   const lt = document.getElementById('lt-'+id);
   if (lt && RTLAST[id]) lt.innerHTML = latestHTML(RTLAST[id].p, RTLAST[id].m);
   const el = document.getElementById('rt-'+id);
-  if (!el) return;
-  // 无实时数据：隐藏角标，不显示占位
-  if (!info || info.price == null || !isFinite(info.price)){
-    el.style.display = 'none';
-    el.innerHTML = '';
-    el.title = '';
+  if (!el){
+    // 元素尚未渲染：先把有效数据缓存，等 renderGrid 创建元素后统一回放
+    if (info && info.price != null && isFinite(info.price)) RTPENDING[id] = info;
     return;
   }
+  // 无实时数据：不强制清空；若有待绘队列里的旧有效数据，保持显示（spot 失败不重绘）
+  if (!info || info.price == null || !isFinite(info.price)){
+    if (RTPENDING[id] && RTPENDING[id].price != null && isFinite(RTPENDING[id].price)){
+      info = RTPENDING[id];
+    } else {
+      el.style.display = 'none';
+      el.innerHTML = '';
+      el.title = '';
+      return;
+    }
+  }
+  RTPENDING[id] = info;   // 绘制成功：缓存最新有效值
   el.style.display = '';
   const p0 = productById(id);
   const mk = marketOf(p0);
@@ -1060,7 +1094,9 @@ window.__rtPaint = function(id, info){
   const price = info.price.toLocaleString('zh-CN',
     {minimumFractionDigits:dp, maximumFractionDigits:dp});
   const tag = info.tag ? info.tag + ' ' : '';
-  el.innerHTML = tag + price + (hasChg ? ' <b>' + arrow + ' ' + fmtPct(chg) + '</b>' : '');
+  const premTxt = (info.prem != null && isFinite(info.prem))
+    ? ' 溢' + fmtPct(info.prem) : '';
+  el.innerHTML = tag + price + (hasChg ? ' <b>' + arrow + ' ' + fmtPct(chg) + '</b>' : '') + premTxt;
   const dt = fmtDataTime(info.ts);
   const tzName = info.tz || (mk && MKSEG[mk] ? MKSEG[mk].name : '');
   el.title = (tag.trim() ? (tag.trim() + ' · ') : '') + '数据时间 ' + (dt || '—')
@@ -1097,10 +1133,12 @@ function renderStats(p){
     <span class="stat" style="color:var(--muted2)">${m.from} → ${m.to}</span>
     ${m.trimmed ? `<span class="stat" style="color:#a3312a">⚠ 前复权早期股价失真（累计分红超出当期股价），
        起点已顺延至 ${m.cutAt}；执行 <code>python update_data.py --full</code> 取后复权口径可修复</span>` : ''}`;
-  // 配对子标的：在基准信息下新增整行（名称 + 与基准对齐的指标 + ETF 溢价率等不可对齐信息）
+  // 配对子标的：在基准信息下新增整行（名称 + 与基准对齐的指标 + 实时角标）
   for (const a of pairedOf(p)){
     const ma = metrics(a); if (!ma) continue;
     el.insertAdjacentHTML('beforeend', attachedStatsHTML(a, ma));
+    // 若 live.js 已缓存实时数据，立刻回放到刚挂上的角标
+    if (window.__rtPaint) window.__rtPaint(a.id, (window.__rtData || {})[a.id] || null);
   }
 }
 
@@ -1109,18 +1147,15 @@ function renderStats(p){
    「最新」同样走 latestHTML 单一出口（与基准行、与右上角角标同一策略），
    并登记 RTLAST + 挂 id，使实时角标到达时这一行也一起刷新。 */
 function attachedStatsHTML(a, m){
-  let html = `<div class="pattach"><div class="pname">${a.name}<span class="pcode">${a.code}</span></div>`;
+  // 配对子标的也挂一个实时角标（如 513650 / 159659），由 live.js 的 fetchRealtime 驱动。
+  let html = `<div class="pattach"><div class="pname">${a.name}<span class="pcode">${a.code}</span>`
+           + `<span class="rtb" id="rt-${a.id}" style="margin-left:auto"></span></div>`;
   html += `<span class="r ${cls(m.ret*100)}">${fmtPct(m.ret*100)}</span>`;
   html += `<span class="stat">最大回撤 <b class="${cls(m.mdd*100)}">${fmtPct(m.mdd*100)}</b></span>`;
   html += `<span class="stat">${isNaN(m.ann)?'—':'年化 <b class="'+cls(m.ann*100)+'">'+fmtPct(m.ann*100)+'</b>'}</span>`;
   RTLAST[a.id] = {p: a, m};
   html += `<span class="stat" id="lt-${a.id}">${latestHTML(a, m)}</span>`;
   html += `<span class="stat" style="color:var(--muted2)">${m.from} → ${m.to}</span>`;
-  if (a.premNow != null && isFinite(a.premNow)){
-    const pc = a.premNow >= 0 ? 'up' : 'down';
-    html += `<span class="stat">溢价率 <b class="${pc}">${a.premNow>=0?'+':''}${a.premNow.toFixed(2)}%</b>`
-          + `<span style="color:var(--muted2)">${a.premDate||''}</span></span>`;
-  }
   html += `</div>`;
   return html;
 }
@@ -1134,21 +1169,29 @@ function renderStrip(list){
   const rows = list.filter(p=>p.kind!=='yield').map(p => ({p, m:metrics(p)})).filter(x=>x.m);
   if (!rows.length){ host.innerHTML=''; return; }
   const byDay = state.stripSort === 'day';
-  const valOf = r => { const v = byDay ? dayChgOf(r.p, r.m) : r.m.ret * 100; return isFinite(v) ? v : -Infinity; };
+  const byPos = state.stripSort === 'pos';
+  const valOf = r => {
+    if (byPos) { const v = positionOf(r.p, r.m); return v != null ? v : -Infinity; }
+    const v = byDay ? dayChgOf(r.p, r.m) : r.m.ret * 100;
+    return isFinite(v) ? v : -Infinity;
+  };
   rows.sort((a,b) => valOf(b) - valOf(a));
   const seg = `<div class="sc">
       <div class="n">排序</div>
       <div class="seg">
-        <button class="sbtn${byDay?'':' on'}" data-s="ret">区间</button>
-        <button class="sbtn${byDay?' on':''}" data-s="day">当日</button>
+        <button class="sbtn${byDay||byPos?'':' on'}" data-s="ret">区间</button>
+        <button class="sbtn${byDay?' on':''}" data-s="day">昨收</button>
+        <button class="sbtn${byPos?' on':''}" data-s="pos" title="按当前价在区间高低点之间的相对位置排序：1=最高价，0=最低价">价位</button>
       </div>
     </div>`;
   const card = r => {
     const ret = r.m.ret * 100, d = dayChgOf(r.p, r.m);
     const sub = isFinite(d) ? `<span class="dv ${cls(d)}">${fmtPct(d)}</span>` : '';
-    return `<div class="sc">
+    const pos = positionOf(r.p, r.m);
+    const posTxt = (pos != null) ? `<span class="dv" style="color:var(--muted2)">${(pos*100).toFixed(1)}%</span>` : '';
+    return `<div class="sc" data-id="${r.p.id}" title="跳转到「${r.p.name}」的图表">
       <div class="n">${r.p.name}</div>
-      <div class="v ${cls(ret)}">${fmtPct(ret)}${sub}</div>
+      <div class="v ${cls(ret)}">${fmtPct(ret)}${sub}${posTxt}</div>
     </div>`;
   };
   host.innerHTML = seg + rows.map(card).join('');
@@ -1156,6 +1199,15 @@ function renderStrip(list){
     if (state.stripSort === b.dataset.s) return;
     state.stripSort = b.dataset.s;
     renderStrip(list);
+  });
+  // 点击榜单条目 → 滚动定位到该标的的卡片（卡片若尚未渲染图表，IntersectionObserver 会随滚动补画）
+  host.querySelectorAll('.sc[data-id]').forEach(it => it.onclick = () => {
+    const el = document.querySelector(`.card[data-id="${it.dataset.id}"]`);
+    if (!el) return;
+    const go = () => el.scrollIntoView({behavior:'smooth', block:'center'});
+    go();
+    // 滚动途中途经的卡片会被懒渲染（补上统计行/图表）而变高，把目标往下推 ⇒ 再校正一次落点
+    setTimeout(go, 400);
   });
 }
 
@@ -1254,6 +1306,13 @@ function renderGrid(){
     });
   }, {rootMargin:'260px'});
   host.querySelectorAll('.card').forEach(c => io.observe(c));
+  // 回放待绘队列：fetchRealtime 可能比 renderGrid 先完成，先把数据存 RTPENDING，等卡片创建后再绘制
+  if (window.__rtPaint && typeof window.__rtPaint === 'function'){
+    for (const id in RTPENDING){
+      const el = document.getElementById('rt-'+id);
+      if (el) window.__rtPaint(id, RTPENDING[id]);
+    }
+  }
 }
 
 function renderAll(){
@@ -1316,7 +1375,8 @@ function zoom(p){
     const cv = $('#bigCanvas');
     if (charts.has(cv)) { charts.get(cv).destroy(); charts.delete(cv); }
     const vs = valSeries(p, L.x);
-    const base = {name:p.name, data:L.y.map(y=>+y.toFixed(3)), raw:s.v, color:UP, fill:!vs, seg:true};
+    // 同 drawChart：必须按 LTTB 采样下标取真值，不能直接给全量 s.v（长度与 L.y 不等会整体错位）
+    const base = {name:p.name, data:L.y.map(y=>+y.toFixed(3)), raw:L.idx.map(i=>s.v[i]), color:UP, fill:!vs, seg:true};
     if (vs) Object.assign(base, vs);
     // ⚠ 局部变量不能叫 vband：会遮蔽全局 vband() 函数，导致下面算档位时抛
     //   "vband is not a function"，整个统计行（含 PE/PB 分位）都渲染不出来。
