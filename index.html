@@ -148,6 +148,8 @@ input:focus,select:focus{border-color:var(--accent)}
 .vlegend{display:flex;align-items:center;gap:9px;font-size:11px;color:var(--muted2);flex-wrap:wrap}
 .vlegend i{width:15px;height:9px;border-radius:2px;display:inline-block;vertical-align:-1px;margin-right:3px}
 .vnote{font-size:11.5px;color:var(--muted2)}
+/* 估值底色面板（工具栏之外，随页面滚动，不悬浮） */
+#valPanel{margin:0 0 14px}
 /* 四象限解读：四条对照，两列排布（窄屏已在下方媒体查询里退回单列） */
 .vquad{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px 26px;margin-top:5px;font-size:11.5px;color:var(--muted2)}
 
@@ -238,7 +240,11 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-si
       <input type="date" id="since" style="display:none;width:148px">
       <span class="count" id="cnt"></span>
     </div>
-    <div class="row" id="valRow" style="display:none">
+  </div>
+
+  <!-- 估值底色：仅「指数」分组展示；放在工具栏之外随页面滚动，不悬浮 -->
+  <div id="valPanel" style="display:none">
+    <div class="row" id="valRow">
       <span class="lab">估值底色</span>
       <div class="tabs" id="valTabs">
         <button class="tab" data-v="off">关</button>
@@ -480,6 +486,7 @@ if (window.Chart) Chart.register(valBandPlugin);
 /* 估值底色配置：只把「当前估值分位」交给插件，铺排与平移都在插件里完成。
    区间内没有估值数据时返回 null（不画底色）。 */
 function valBandFor(pre, vval){
+  if (state.group !== '指数') return null;   // 与 renderValBar 同款门控：估值底色只对指数生效
   const vals = (vval || []).filter(x => x != null && isFinite(x));
   if (!vals.length) return null;
   const pct = vpct(pre, vals[vals.length - 1]);
@@ -522,13 +529,16 @@ const VQUAD = [
   'PE高 + PB高 → 利润贵 + 资产贵 → 谨慎，等待估值回落',
 ];
 function renderValBar(){
-  const row = $('#valRow');
-  if (!VDATA || !VDATA.items || !Object.keys(VDATA.items).length){
-    row.style.display = 'none'; $('#valQuad').style.display = 'none'; return;
-  }
+  const panel = $('#valPanel'), row = $('#valRow'), quad = $('#valQuad');
+  /* 估值底色只对指数有意义：只在「指数」分组展示整块（含开关、图例、四象限解读），
+     非指数分组整块隐藏，且底色也一并停用（见 valBandFor 的同款门控）。 */
+  const show = state.group === '指数'
+               && VDATA && VDATA.items && Object.keys(VDATA.items).length;
+  if (!show){ panel.style.display = 'none'; quad.style.display = 'none'; return; }
+  panel.style.display = '';
   row.style.display = '';
-  $('#valQuad').style.display = '';
-  $('#valQuad').innerHTML = VQUAD.map(t => `<span>${t}</span>`).join('');
+  quad.style.display = '';
+  quad.innerHTML = VQUAD.map(t => `<span>${t}</span>`).join('');
   $('#valTabs').innerHTML = [['off','关'],['pe','PE'],['pb','PB']].map(([v,t]) =>
     `<button class="tab${state.valKind===v?' on':''}" data-v="${v}">${t}</button>`).join('');
   $('#valTabs').querySelectorAll('.tab').forEach(b => b.onclick = () => {
@@ -753,13 +763,29 @@ function pairedOf(p){
 /* ============================================================ 图表 */
 function chartConfig(idxs, labels, seriesList, opts){
   opts = opts || {};
+  /* 纵轴小数位：显式指定用之；否则按序列振幅自适应——
+     债券基金等低波动标的整段振幅不足 1%，整数刻度会全部挤成 0%/1%/-0%（不可读），
+     振幅 <5% 时用 2 位小数，其余维持整数（股票等高波动读数更简洁）。 */
+  let yDec = opts.yDec;
+  if (yDec == null){
+    let lo = Infinity, hi = -Infinity;
+    for (const s of seriesList) for (const y of (s.data || [])){
+      if (y == null || !isFinite(y)) continue;
+      if (y < lo) lo = y;
+      if (y > hi) hi = y;
+    }
+    yDec = (hi - lo) < 5 ? 2 : 0;
+  }
   const scales = {
     x:{ grid:{display:false}, border:{color:'#e5e5e9'},
         ticks:{ maxTicksLimit:8, autoSkip:true, color:'#9a9aa1', font:{size:10.5}, maxRotation:0 } },
     y:{ position:'right',
         grid:{ color:(c)=> c.tick.value===0 ? '#c8c8cf' : '#f1f1f3' },
         border:{display:false},
-        ticks:{ callback:v=>v.toFixed(opts.yDec||0)+'%', color:'#9a9aa1', font:{size:10.5} } }
+        ticks:{ callback:v=>{
+                  const t = v.toFixed(yDec);
+                  return (t.startsWith('-') && parseFloat(t) === 0 ? t.slice(1) : t) + '%';
+                }, color:'#9a9aa1', font:{size:10.5} } }
   };
   // 估值底色自包含线性映射，不再绘制左侧数值轴（净值落入哪个色块即代表对应分位档）
   return {
