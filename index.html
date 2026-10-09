@@ -113,12 +113,6 @@ input:focus,select:focus{border-color:var(--accent)}
 .slothead:first-child{margin-top:0}
 .slothead span{font-size:12.5px;font-weight:650;color:var(--text);letter-spacing:-.1px}
 .slothead::after{content:"";flex:1;height:1px;background:var(--line)}
-.bgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:10px;margin-top:10px}
-.bcell{border:1px solid var(--line);border-radius:8px;padding:9px 11px;background:var(--chip)}
-.bcell .k{font-size:11.5px;color:var(--muted2)}
-.bcell .v{font-size:17px;font-weight:620;letter-spacing:-.3px;margin-top:1px}
-.bcell .s{font-size:11.5px;color:var(--muted);margin-top:1px}
-.bnote{margin-top:8px;font-size:11.5px;color:var(--muted2);line-height:1.6}
 .chead{display:flex;align-items:flex-start;gap:10px;margin-bottom:2px}
 .cname{font-size:14.5px;font-weight:620;letter-spacing:-.1px;min-width:0}
 .cmeta{font-size:11.5px;color:var(--muted2);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1456,59 +1450,6 @@ function orderBySlot(list){
     })
     .map(x => x.p);
 }
-/* ============================================================ 债市晴雨表
-   只挂在「债券基金」分组页顶部（中国国债收益率卡片之前），不新增数据源——
-   三个分项全部由 CNGB（中债国债收益率 1Y/3Y/10Y）现有序列算出：
-     · 利率水平：10Y 在近一年样本中的分位。高位＝未来下行空间大（利好债价）
-     · 短期动向：近 20 个交易日 10Y 变动 bp。下行＝债价走强
-     · 曲线形态：期限利差 10Y−1Y 及其近一年分位。陡＝宽松/复苏预期，平＝谨慎 */
-/* 综合结论只以 cmeta 的描述文案呈现（不挂彩色徽章） */
-const BARO = {
-  '晴':  {d:'收益率下行、环境顺风，久期仓位可持有'},
-  '多云': {d:'方向未明，以票息为主、久期中性'},
-  '阴':  {d:'收益率走平或小幅上行，压缩久期、重票息'},
-  '雨':  {d:'收益率明显上行，债价承压，缩短久期、留备用金'},
-};
-function bondBarometer(){
-  if (state.group !== '债券基金') return '';
-  const p = DATA.products.find(x => x.kind === 'yield' && x.y1 && x.y10 && x.d && x.d.length);
-  if (!p || p.d.length < 30) return '';
-  const n = p.d.length, win = Math.min(n, 244);
-  const last10 = +p.y10[n-1], last1 = +p.y1[n-1];
-  const chg20 = (p.y10[n-1] - p.y10[Math.max(0, n-21)]) * 100;
-  const pct = (arr, v) => {
-    const s = arr.slice(n - win).filter(x => isFinite(x));
-    if (!s.length) return null;
-    return s.filter(x => x <= v).length / s.length;
-  };
-  const spread = last10 - last1;
-  const sp = p.y10.map((x, i) => x - p.y1[i]);
-  const pLevel = pct(p.y10, last10), pSpread = pct(sp, spread);
-  if (pLevel == null || pSpread == null) return '';
-  const lvl = pLevel  >= 0.75 ? {t:'高位', s: 1} : (pLevel  <= 0.25 ? {t:'低位', s:-1} : {t:'中位', s: 0});
-  const mom = chg20   <= -5   ? {t:'下行', s: 2} : (chg20   >=  5   ? {t:'上行', s:-2} : {t:'走平', s: 0});
-  const crv = pSpread >= 0.75 ? {t:'陡峭', s: 1} : (pSpread <= 0.25 ? {t:'平坦', s:-1} : {t:'正常', s: 0});
-  const tot = lvl.s + mom.s + crv.s;
-  const tag = tot >= 3 ? '晴' : (tot >= 1 ? '多云' : (tot >= -1 ? '阴' : '雨'));
-  const b = BARO[tag];
-  const cell = (k, v, s) => `<div class="bcell"><div class="k">${k}</div>`
-                          + `<div class="v">${v}</div><div class="s">${s}</div></div>`;
-  return `<div class="card wide">
-    <div class="chead"><div style="min-width:0">
-      <div class="cname">债市晴雨表</div>
-      <div class="cmeta">中债国债收益率曲线 · 截至 ${p.d[n-1]} · ${b.d}</div>
-    </div></div>
-    <div class="bgrid">
-      ${cell('10Y 国债收益率', last10.toFixed(2) + '%',
-             `近一年分位 ${(pLevel*100).toFixed(0)}% · ${lvl.t}`)}
-      ${cell('近 20 日变动', (chg20 >= 0 ? '+' : '') + chg20.toFixed(0) + 'bp', `10Y · ${mom.t}`)}
-      ${cell('期限利差 10Y−1Y', (spread*100).toFixed(0) + 'bp',
-             `1Y ${last1.toFixed(2)}% · 近一年分位 ${(pSpread*100).toFixed(0)}% · ${crv.t}`)}
-    </div>
-    <div class="bnote">口径：分位＝该指标在近一年（${win} 个交易日）样本内的百分位；综合＝利率水平（高位 +1／低位 −1）＋ 短期动向（下行 +2／上行 −2）＋ 曲线形态（陡 +1／平 −1）。仅供参考，不构成投资建议。</div>
-  </div>`;
-}
-
 function gridHTML(list){
   let out = '', cur = Symbol('none');
   for (const p of list){
@@ -1526,7 +1467,7 @@ function renderGrid(){
   $('#cnt').textContent = `显示 ${list.length} / ${DATA.products.length}`;
   if (!list.length){ host.innerHTML = `<div class="empty">没有匹配的标的</div>`; $('#strip').innerHTML=''; return; }
   renderStrip(list);
-  host.innerHTML = bondBarometer() + gridHTML(list);
+  host.innerHTML = gridHTML(list);
   if (io) io.disconnect();
   io = new IntersectionObserver(ents => {
     ents.forEach(e => {
@@ -1538,7 +1479,7 @@ function renderGrid(){
       io.unobserve(e.target);
     });
   }, {rootMargin:'260px'});
-  // 只观察带 data-id 的标的卡片：债市晴雨表等整块面板没有 data-id，喂给 renderStats 会抛
+  // 只观察带 data-id 的标的卡片：整块面板（无 data-id）喂给 renderStats 会抛
   host.querySelectorAll('.card[data-id]').forEach(c => io.observe(c));
   // 回放待绘队列：fetchRealtime 可能比 renderGrid 先完成，先把数据存 RTPENDING，等卡片创建后再绘制
   if (window.__rtPaint && typeof window.__rtPaint === 'function'){
