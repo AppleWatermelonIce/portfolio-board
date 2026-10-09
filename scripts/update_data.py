@@ -21,8 +21,10 @@
   开放式基金 / QDII      : 天天基金 pingzhongdata.js
 
 口径
-  · 股票·ETF : 前复权收盘价 (fqt=1)
-  · 基金     : 红利再投资复权净值
+  · 股票·ETF : v＝后复权收盘价 (fqt=2)，恒正且单调递增，收益一律以它为准；
+               q＝前复权收盘价 (fqt=1)，减法式，只供前端「市价」口径显示（长周期可能为负）；
+               前端在 q 缺失或窗口内出现非正值时，自动回退 v 的等比前复权。
+  · 基金     : v＝红利再投资复权净值；u＝单位净值（前端「市价」口径显示用）
                R[i] = R[i-1] * (1 + (eff[i] + div_eff[i] - eff[i-1]) / eff[i-1]), R[0] = 1.0
                eff[i] = nav[i] * 累积份额折算因子   ← 必须处理「拆分」，否则拆分日假摔
                验证：519195 +671.78%（官方累计口径671%）/ 260101 +2285.76% / 481001 +1681.53%
@@ -98,12 +100,13 @@ def throttled_get(url, referer=None):
 
 
 # ---------------------------------------------------------------- 东财日K
-def fetch_em_kline(secid, beg="19900101", end="20500101"):
-    # ⚠ 必须用后复权(fqt=2)：前复权在长周期会得到负值
+def fetch_em_kline(secid, beg="19900101", end="20500101", fqt=2):
+    # ⚠ 主序列必须用后复权(fqt=2)：前复权在长周期会得到负值
     #   （累计现金分红超过当期股价时，向前折算后早期价格为负），
     #   实测美的集团前复权首值 -12.78 -> "成立来"被算成 -778%。后复权单调递增且恒正。
+    # fqt=1（前复权）只用于前端「市价」口径的价格读数，见 fetch_em_qfq()。
     q = {
-        "secid": secid, "klt": "101", "fqt": "2",
+        "secid": secid, "klt": "101", "fqt": str(fqt),
         "beg": beg, "end": end,
         "fields1": "f1,f2,f3,f4,f5,f6",
         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f116",
@@ -120,6 +123,83 @@ def fetch_em_kline(secid, beg="19900101", end="20500101"):
         dates.append(c[0])                  # f51 日期
         vals.append(round(float(c[2]), 6))  # f53 收盘
     return dates, vals
+
+
+# ---------------------------------------------------------------- 东财前复权（供前端「市价」口径）
+def _tx_qfq_once(code, end="", count=640):
+    """腾讯前复权单段（与 _tx_once 同款参数，只是 fq=qfq）"""
+    p = f"{code},day,,{end},{count},qfq"
+    hosts = []
+    if code.startswith("hk"):
+        hosts.append("https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get")
+    hosts += ["https://web.ifzq.gtimg.cn/appstock/app/newfqkline/get",
+              "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get",
+              "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"]
+    for host in hosts:
+        try:
+            j = json.loads(throttled_get(host + "?param=" + urllib.parse.quote(p),
+                                         referer="https://gu.qq.com/"))
+            d = j.get("data")
+            if not isinstance(d, dict):
+                continue
+            arr = (d.get(code) or {}).get("qfqday") or []
+            if arr:
+                return arr
+        except Exception:
+            continue
+    return []
+
+
+def fetch_tx_qfq(secid, max_seg=16):
+    """腾讯前复权全量（分段往前翻）。⚠ 分段拼接在这里是安全的：
+       腾讯各段返回的是【同一复权基准】下的前复权值（不是按取数日各自折算），
+       与"昨天的前复权 + 今天的前复权"这类跨基准拼接是两回事。"""
+    code = em2tx(secid)
+    if not code:
+        raise RuntimeError(f"腾讯通道不支持 secid={secid}")
+    seen, end = {}, ""
+    for _ in range(max_seg):
+        arr = _tx_qfq_once(code, end=end)
+        if not arr:
+            break
+        for r in arr:
+            seen[r[0]] = (r[0], round(float(r[2]), 6))
+        oldest = arr[0][0]
+        if len(arr) < 640:
+            break
+        end = (datetime.strptime(oldest, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    if not seen:
+        raise RuntimeError(f"腾讯无前复权数据 code={code}")
+    ds = sorted(seen)
+    return ds, [seen[d][1] for d in ds]
+
+
+def fetch_em_qfq(secid):
+    """抓【全量】前复权日K（腾讯 qfq 优先，东财 fqt=1 降级），返回 {日期: 收盘}。
+
+    为什么必须全量、且不能与本地历史做增量拼接：
+    行情软件的「前复权」是【减法式】——历史价逐日减去此后累计的每股现金分红，
+    所以每发生一次分红，整条历史序列都会整体下移。若把"昨天算出来的前复权"与
+    "今天算出来的"按日期拼接，得到的是两个不同复权基准的混合体，曲线会在拼接点断裂。
+    ⇒ 只能每次整条替换。代价是每个标的多一次全量请求（约 3000 点，单请求可返回）。
+
+    口径核对（美的集团 000333，2023-09-28 → 2026-10-09）：
+      不复权 55.48 → 82.46 (+48.63%)
+      前复权 44.81 → 82.46 (+84.03%)   ← 本函数返回的就是这一条（累计派息 10.67 元/股）
+      后复权 255.971 → 397.160 (+55.15%)
+    注意：减法式前复权的区间收益 ≠ 后复权（前者系统性偏高），这是减法式本身的特性，
+    不是数据错误；    长周期（如"成立来"）前复权可能整段为负，前端遇到非正值会回退等比前复权。
+    ⚠ 源的选择：实测两家都是「减法式」，但绝对值不同（美的集团成立来首值：腾讯 -0.142、
+    东财 -12.78，累计派息口径差约 12.6 元/股）。主人给的核对值 美的 2023-09-28 = 44.81
+    与【腾讯 qfq】逐位吻合（44.810），故腾讯优先、东财仅作降级。
+    """
+    try:
+        dates, vals = fetch_tx_qfq(secid)
+        return dict(zip(dates, vals))
+    except Exception as e:
+        dates, vals = fetch_em_kline(secid, fqt=1)
+        print(f"  [前复权降级] {secid} 腾讯不可用（{type(e).__name__}），改用东财 fqt=1", flush=True)
+        return dict(zip(dates, vals))
 
 
 # ---------------------------------------------------------------- 腾讯日K（备用）
@@ -580,6 +660,10 @@ def fetch_fund_nav(code):
         R.append(r)
     base = navs[0] if navs else 1.0
     vals = [round(x * base, 6) for x in R]
+    # 单位净值（u）：Data_netWorthTrend 的 y，就是基金每天公布的、不含红利再投资的净值。
+    # 前端「市价」口径画这条曲线，「复权」口径画 vals（红利再投资复权净值）。
+    # 份额折算同样会让单位净值出现假瀑布，故与 vals 走同一套 fix_splits 校正（见 update_one）。
+    navs = [round(x, 6) for x in navs]
 
     warn = ""
     try:
@@ -592,7 +676,7 @@ def fetch_fund_nav(code):
                 warn = f"分红{n_div}次/拆分{n_spl}次；复权较累计净值年化高 {gap:+.2f}pp（含红利再投资收益）"
     except Exception:
         pass
-    return dates, vals, warn
+    return dates, vals, navs, warn
 
 
 # ---------------------------------------------------------------- 本地历史
@@ -728,8 +812,9 @@ def update_one(p, full):
 
     warn = "",
     extra = {}
+    unav = None          # 单位净值（仅基金，前端「市价」口径用）
     if p["src"] == "fund":
-        dates, vals, warn = fetch_fund_nav(p["secid"])
+        dates, vals, unav, warn = fetch_fund_nav(p["secid"])
         channel = "天天基金"
     elif p["src"] == "goldcny":
         dates, vals = fetch_gold_cny(p, need_full, beg_since)
@@ -750,9 +835,39 @@ def update_one(p, full):
         vals, nfix = fix_splits(vals)
         if nfix:
             print(f"  [折算校正] {pid} {p['name']}：检出并还原 {nfix} 处份额折算跳变", flush=True)
+        # 单位净值同步校正，保持两条曲线在同一份额基准上（否则「市价」口径会留着假瀑布）
+        if unav and len(unav) == len(dates):
+            unav, _ = fix_splits(unav)
 
     if not need_full and old and p["src"] != "cnyield":
+        # 单位净值同样是"新值覆盖旧值"，与 merge() 同策略；缺失日沿用旧值（基金净值不会回撤修订）
+        umap = dict(zip(old.get("d", []), old.get("u") or [])) if unav else None
+        if umap is not None:
+            umap.update(dict(zip(dates, unav)))
         dates, vals = merge(old, dates, vals)
+        if umap is not None:
+            unav = [umap.get(dd) for dd in dates]
+
+    # 前复权序列（前端「市价」口径的价格读数）：只给走东财行情的股票 / ETF / 指数抓。
+    # ⚠ 必须按最终 dates 逐日对齐，且要求 100% 覆盖——缺一天就整条丢弃，
+    #   绝不做部分拼接（不同复权基准不可混用，理由见 fetch_em_qfq 注释）。
+    qmap = None
+    if p["src"] == "em" and dates:
+        try:
+            qmap = fetch_em_qfq(p["secid"])
+        except Exception as e:
+            print(f"  [前复权跳过] {pid} {p['name']}：{type(e).__name__} {str(e)[:90]}", flush=True)
+            qmap = None
+    qser = None
+    if qmap:
+        miss = sum(1 for dd in dates if dd not in qmap)
+        if miss:
+            print(f"  [前复权跳过] {pid} {p['name']}：日期缺口 {miss}/{len(dates)} 天", flush=True)
+        else:
+            qser = [round(float(qmap[dd]), 6) for dd in dates]
+            qser, nqfix = fix_splits(qser)
+            if nqfix:
+                print(f"  [前复权折算校正] {pid} {p['name']}：{nqfix} 处", flush=True)
 
     # ETF 价-净溢价率（仅场内 ETF 标的、且标记 prem:true 时抓取）
     if p.get("prem") and dates and vals and len(dates) == len(vals):
@@ -769,6 +884,10 @@ def update_one(p, full):
         "last": dates[-1] if dates else "",
         "d": dates, "v": vals,
     }
+    if unav and len(unav) == len(dates):
+        obj["u"] = unav                    # 单位净值（基金「市价」口径）
+    if qser and len(qser) == len(dates):
+        obj["q"] = qser                    # 前复权收盘价（股票/ETF/指数「市价」口径）
     obj.update(meta_of(p))             # 前端元信息：slot / pair / prem
     obj.update(extra)                  # 多序列标的：y1/y3/y10 + kind / 溢价率
     if warn and warn != ("",):

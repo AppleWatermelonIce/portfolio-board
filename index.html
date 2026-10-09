@@ -113,6 +113,12 @@ input:focus,select:focus{border-color:var(--accent)}
 .slothead:first-child{margin-top:0}
 .slothead span{font-size:12.5px;font-weight:650;color:var(--text);letter-spacing:-.1px}
 .slothead::after{content:"";flex:1;height:1px;background:var(--line)}
+.bgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:10px;margin-top:10px}
+.bcell{border:1px solid var(--line);border-radius:8px;padding:9px 11px;background:var(--chip)}
+.bcell .k{font-size:11.5px;color:var(--muted2)}
+.bcell .v{font-size:17px;font-weight:620;letter-spacing:-.3px;margin-top:1px}
+.bcell .s{font-size:11.5px;color:var(--muted);margin-top:1px}
+.bnote{margin-top:8px;font-size:11.5px;color:var(--muted2);line-height:1.6}
 .chead{display:flex;align-items:flex-start;gap:10px;margin-bottom:2px}
 .cname{font-size:14.5px;font-weight:620;letter-spacing:-.1px;min-width:0}
 .cmeta{font-size:11.5px;color:var(--muted2);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -210,8 +216,8 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-si
     <h1>持仓净值曲线</h1>
     <div class="sub">数据更新于 <b id="upd">—</b> · 共 <b id="pcount">—</b> 个标的 · 收益曲线以区间起点为 <b>0%</b></div>
     <div class="tips">
-      口径：股票/ETF 为<b>后复权收盘价</b>；开放式基金为<b>红利再投资复权净值</b>（含分红与份额折算）；黄金为<b>COMEX 黄金 × 美元兑人民币</b>折算的人民币元/克；汇率为美元兑人民币。
-      <span style="color:var(--up)">红涨</span> / <span style="color:var(--down)">绿跌</span>（A股习惯）。<br>
+      口径（工具栏切换）<b>市价</b>：股票/ETF <b>前复权</b>、基金 <b>单位净值</b>；<b>复权</b>：股票/ETF <b>后复权</b>、基金 <b>红利再投资复权净值</b>（含分红与份额折算）。黄金＝<b>COMEX × 美元兑人民币</b>（元/克）；汇率＝欧洲央行每日参考汇率。<br>
+      <span style="color:var(--up)">红涨</span> / <span style="color:var(--down)">绿跌</span>（A股习惯）。
       <b>打开网页即自动补齐最新数据</b>：同一天内多次打开只更新一次；右侧按钮可手动强刷。全历史基座由 <code>update_data.py</code> 生成。
       卡片右上角「<b>盘</b>」为实时盘中参考价（股票/ETF/指数/港股/美股，用行情源自带涨跌幅）、「<b>现</b>」为现货黄金、「<b>汇</b>」为美元兑人民币实时汇率，<b>仅供查看、不并入收益曲线</b>；商品/汇率因数据源不提供前收，其红绿＝角标价相对卡片「<b>最新</b>」价的偏离（<span style="color:var(--up)">高于为红</span>、<span style="color:var(--down)">低于为绿</span>）。场外基金无盘中实时价，故不显示角标。
     </div>
@@ -221,6 +227,8 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-si
     <div class="row">
       <span class="lab">区间</span>
       <div class="tabs" id="ranges"></div>
+      <span class="lab" style="margin-left:14px">口径</span>
+      <div class="tabs" id="priceKinds"></div>
       <div class="spacer"></div>
       <input type="text" id="q" placeholder="搜索名称 / 代码" style="width:172px">
       <button class="btn" id="btnRefresh">↻ 立即更新</button>
@@ -338,7 +346,9 @@ let state = {
   hidden: new Set(JSON.parse(localStorage.getItem(LS.hidden) || '[]')),
   compare: false,
   stripSort: 'ret',          // 榜单排序依据：'ret'=区间收益、'day'=最新收盘交易日当日涨跌、'pos'=当前价在区间高低点间的相对位置
+  priceKind: 'real',         // 价格读数口径：'real'=前复权（末点＝真实收盘价）、'adj'=后复权/复权净值（总回报口径）
 };
+if (!['real','adj'].includes(state.priceKind)) state.priceKind = 'real';
 const charts = new Map();
 
 /* ============================================================ 估值底色（PE / PB 历史分位）
@@ -581,15 +591,44 @@ function renderValBar(){
 }
 
 /* ============================================================ 区间切片 */
+/* 「市价」口径下要绘制的替代序列（与 p.d 等长），取不到返回 null。
+     股票 / ETF / 指数 → 前复权真序列 p.q（腾讯 qfq 优先、东财 fqt=1 降级；
+       减法式，与行情软件显示一致；长周期会因累计分红而失真，由 sanitize 顺延基准）
+     开放式基金        → 单位净值 p.u（不含红利再投资）
+     商品 / 汇率 / 国债收益率 / 港售基金 → 没有替代：产物序列本身就是市价或净值口径 */
+const SPOT_SRC = {goldcny:1, fx:1, cnyield:1, yahoo:1};
+function altSeriesOf(p){
+  if (state.priceKind !== 'real' || SPOT_SRC[p.src]) return null;
+  const n = (p.d || []).length;
+  if (!n || !(p.v && p.v.length === n)) return null;
+  const alt = (p.src === 'fund') ? p.u : p.q;
+  if (!alt || !alt.length) return null;
+  const m = Math.min(alt.length, n);
+  if (m === n) return alt;
+  /* 增量更新会给 d/v 补上最近若干交易日，而 q/u 要等下一次全量才同步（长 m < n 个尾巴）。
+     尾部按「末点比例」等比补齐 —— 前复权用 qfqFactor（末点＝真实收盘价，与角标/最新同源），
+     单位净值用 u/v 末点比。历史段仍是真序列，只有最后几个增量日是等比过渡。 */
+  const k = (p.src === 'fund')
+    ? ((p.v[m-1] > 0 && alt[m-1] != null) ? alt[m-1] / p.v[m-1] : null)
+    : qfqFactor(p);
+  if (k == null || !isFinite(k) || !(k > 0)) return null;
+  const out = alt.slice(0, m);
+  for (let i = m; i < n; i++) out.push(p.v[i] * k);
+  return out;
+}
+
 function slice(p, rk){
   const d = p.d, v = p.v, n = d.length;
   if (!n) return null;
+  const alt = altSeriesOf(p);
+  const cut = (start) => ({d: d.slice(start), v: v.slice(start),
+                           alt: alt ? alt.slice(start) : null, start});
   const lastStr = d[n-1];
   const last = parseDate(lastStr);
   let start = 0;
   if (rk === 'incep'){ start = 0; }
   else if (rk === 'since'){
-    if (!state.since) return {d, v, start:0, anchorMode:false};
+    if (!state.since) return {d, v, alt, start:0, anchorMode:false};
     let i = 0; while (i < n && d[i] < state.since) i++;
     if (i >= n) return null;
     start = Math.max(0, i-1);            // 含起点前一日作基准
@@ -606,35 +645,71 @@ function slice(p, rk){
     if (i >= n) i = n-1;
     start = Math.max(0, i-1);
   }
-  return {d: d.slice(start), v: v.slice(start), start};
+  return cut(start);
 }
 
-/* 防御：前复权序列在长周期可能跨入负值（累计现金分红超过当期股价），
-   负值做归一化基准会得到荒谬的收益率。此处把基准推到第一个正值。
-   根治办法是重跑脚本取后复权口径；这里只是不让页面显示错误数字。 */
-function sanitize(s){
-  if (!s) return s;
-  let i = 0;
-  while (i < s.v.length && !(s.v[i] > 0)) i++;
-  if (i > 0 && i < s.v.length)
-    return {d: s.d.slice(i), v: s.v.slice(i), trimmed: i, cutAt: s.d[i]};
-  return s;
+/* 防御：序列里出现 0/负值做归一化基准会得到荒谬的收益率。
+   后复权恒为正、不会触发；【减法式前复权】在长周期会因累计分红超过当时股价而整段为负，
+   此时把基准顺延到「从末尾往前最长的一段连续正值」的起点，并给出提示。
+   adj（后复权/复权净值）与 alt 同步切片，保证 tooltip 并列显示与曲线同源。 */
+function sanitize(d, v, adj, alt){
+  const n = v.length;
+  let i = n - 1;
+  while (i >= 0 && !(v[i] > 0)) i--;          // 跳过后缀非正值
+  if (i < 0) return {d, v, adj, alt, trimmed:0, cutAt:''};
+  let j = i;
+  while (j > 0 && v[j-1] > 0) j--;            // 回溯最长连续正值段
+  if (j === 0) return {d, v, adj, alt, trimmed:0, cutAt:''};
+  return {d: d.slice(j), v: v.slice(j), adj: adj.slice(j),
+          alt: alt ? alt.slice(j) : null, trimmed: j, cutAt: d[j]};
 }
 
 function metrics(p){
   const raw = slice(p, state.range);
   if (!raw || raw.d.length < 2) return null;
-  const s = sanitize(raw);
+  /* 选定「绘制序列」并顺延非正值基准（顺序不能反：前复权的负值只在市价口径下出现）。
+     复权口径：一律用产物序列（股票/ETF＝后复权，基金＝红利再投资复权净值）。
+     市价口径：① 商品/汇率/利率 → 产物序列本身就是市价，直接用；
+               ② 有替代序列 → 用它（股票＝前复权真序列，基金＝单位净值）；
+               ③ 替代序列不可用（缺失／全为非正／顺延后过短）→ 回退【等比前复权】
+                  ＝后复权 × 常数，末点＝真实收盘价，收益曲线与后复权相同。
+     m.s.adj 始终保留产物序列（后复权/复权净值），供悬浮提示并列显示两种口径。 */
+  const build = (seq, alt) => {
+    const t = sanitize(raw.d, seq, raw.v, alt);
+    return {s0: t, ok: t.d.length >= Math.max(20, raw.d.length * 0.2)};
+  };
+  let pick = raw.v, altPick = null, altOn = false, cut = build(raw.v, null);
+  if (state.priceKind === 'real'){
+    if (SPOT_SRC[p.src]) altOn = true;
+    else {
+      let done = false;
+      if (raw.alt && raw.alt.length === raw.d.length
+          && raw.alt.every(x => x != null && isFinite(x)) && raw.alt.some(x => x > 0)){
+        const t = build(raw.alt, raw.alt);
+        if (t.ok){ pick = raw.alt; altPick = raw.alt; altOn = true; cut = t; done = true; }
+      }
+      if (!done && p.src !== 'fund'){
+        const k = qfqFactor(p);
+        if (k != null){
+          const seq = raw.v.map(x => x * k);
+          pick = seq; altOn = true; cut = build(seq, null);
+        }
+      }
+    }
+  }
+  const s0 = cut.s0;
+  const v = s0.v;
+  const s = {d: s0.d, v, adj: s0.adj};
   const v0 = s.v[0], vn = s.v[s.d.length-1];
   const ret = vn/v0 - 1;
   let peak = s.v[0], mdd = 0;
   for (const x of s.v){ if (x > peak) peak = x; const dd = x/peak - 1; if (dd < mdd) mdd = dd; }
   const days = daysBetween(s.d[0], s.d[s.d.length-1]);
   const ann = days > 20 ? Math.pow(vn/v0, 365/days) - 1 : NaN;
-  const prev = p.v[Math.max(0, p.v.length-2)];
-  const lastChg = prev ? p.v[p.v.length-1]/prev - 1 : NaN;
+  const prev = v[Math.max(0, v.length-2)];
+  const lastChg = prev ? vn/prev - 1 : NaN;
   return {ret, mdd, ann, days, lastChg, n:s.d.length, from:s.d[0], to:s.d[s.d.length-1], s,
-          trimmed: s.trimmed || 0, cutAt: s.cutAt || ''};
+          altOn, trimmed: s0.trimmed || 0, cutAt: s0.cutAt || ''};
 }
 
 /* ============================================================ 渲染工具栏 */
@@ -643,6 +718,13 @@ function renderToolbar(){
     `<button class="tab${state.range===r.k?' on':''}" data-r="${r.k}">${r.t}</button>`).join('');
   $('#ranges').querySelectorAll('.tab').forEach(b =>
     b.onclick = () => { state.range = b.dataset.r; localStorage.setItem(LS.range, state.range); renderAll(); });
+
+  $('#priceKinds').innerHTML = [
+    {k:'real', t:'市价'},
+    {k:'adj',  t:'复权'},
+  ].map(o => `<button class="tab${state.priceKind===o.k?' on':''}" data-pk="${o.k}" title="价格口径（切换会同时改变价格读数与收益曲线）：${'　'}市价＝股票/ETF 前复权（与行情软件一致的减法式，末点＝真实收盘价，与角标/「最新」一致）、基金单位净值；复权＝股票/ETF 后复权、基金红利再投资复权净值（总回报口径）。减法式前复权的区间收益与后复权不相等（前者含累计分红被减去的基数效应），属口径差异而非数据错误。">${o.t}</button>`).join('');
+  $('#priceKinds').querySelectorAll('.tab').forEach(b =>
+    b.onclick = () => { state.priceKind = b.dataset.pk; renderAll(); });
 
   const gs = ['全部', ...new Set(DATA.products.map(p=>p.group))];
   $('#groups').innerHTML = gs.map(g =>
@@ -727,7 +809,22 @@ function chartConfig(idxs, labels, seriesList, opts){
               const s = seriesList[c.datasetIndex];
               if (!s) return '';
               let t = (s.name ? s.name + '  ' : '') + (c.parsed.y>=0?'+':'') + c.parsed.y.toFixed(2) + '%';
-              if (s.raw && s.raw[i] != null) t += '   净值 ' + s.raw[i].toFixed(4);
+              if (s.raw && s.raw[i] != null){
+                const p0 = s.pid ? productById(s.pid) : null;
+                const adjv = (s.adj && s.adj[i] != null) ? (+s.adj[i]) : null;
+                const adjTxt = (adjv != null) ? '（复权 ' + adjv.toFixed(4) + '）' : '';
+                if (p0 && s.altOn){
+                  // 市价口径：股票/ETF 显示【前复权】、基金显示【单位净值】，并附后复权值便于对账
+                  if (p0.src === 'goldcny' || p0.src === 'fx')
+                    t += '   市价 ' + (+s.raw[i]).toFixed(p0.src === 'fx' ? 4 : 2);
+                  else if (p0.src === 'fund')
+                    t += '   单位净值 ' + (+s.raw[i]).toFixed(4) + adjTxt;
+                  else
+                    t += '   市价 ' + (+s.raw[i]).toFixed(2) + adjTxt;
+                } else {
+                  t += '   净值 ' + (+s.raw[i]).toFixed(4);
+                }
+              }
               if (s.vval && s.vval[i] != null){
                 const p = vpct(s.vpre, s.vval[i]);
                 t += `   ${s.vkind||''} ${s.vval[i].toFixed(2)}`;
@@ -780,8 +877,8 @@ function drawChart(canvas, p){
   const base = {name:p.name, data:L.y.map(y=>+y.toFixed(3)),
     // 悬浮「净值」必须取该点【真实】的原始值：LTTB 是非均匀采样，
     // 用「下标线性插值」回推原序列会把日期错位（长历史标的可见巨额偏差，如格力 54.98 vs 真值 6254.84）。
-    raw:L.idx.map(i=>s.v[i]),
-    color:UP, fill:!vo, seg:true};
+    raw:L.idx.map(i=>s.v[i]), adj:L.idx.map(i=>s.adj[i]),
+    color:UP, fill:!vo, seg:true, pid:p.id, altOn:m.altOn};
   // 悬浮提示里仍带出该日 PE/PB 与分位（不画线，只在 tooltip 与徽章里体现）
   if (vo) Object.assign(base, {vkind:vo.vs.vkind, vpre:vo.vs.vpre, vval:vo.vs.vval});
   const series = [base];
@@ -801,7 +898,9 @@ function buildPairSeries(p, m, color){
   const s = m.s;
   const ratio = s.v.map(x => (x/s.v[0] - 1) * 100);
   const L = lttb(s.d, ratio, 900);
-  return {name:p.name, color, labels:L.x, data:L.y.map(y=>+y.toFixed(3)), raw:L.idx.map(i=>+s.v[i].toFixed(4))};
+  return {name:p.name, color, labels:L.x, data:L.y.map(y=>+y.toFixed(3)),
+          raw:L.idx.map(i=>+s.v[i].toFixed(4)), adj:L.idx.map(i=>+s.adj[i].toFixed(4)),
+          altOn:m.altOn};
 }
 function drawChartPair(canvas, base, atts){
   const mb = metrics(base);
@@ -820,11 +919,12 @@ function drawChartPair(canvas, base, atts){
   const ds = series.map((s, k) => {
     const arr = new Array(labels.length).fill(null);
     const rawArr = new Array(labels.length).fill(null);
+    const adjArr = new Array(labels.length).fill(null);
     s.labels.forEach((l,i) => {
       const j = idx.get(l);
-      if (j !== undefined){ arr[j] = s.data[i]; rawArr[j] = s.raw[i]; }
+      if (j !== undefined){ arr[j] = s.data[i]; rawArr[j] = s.raw[i]; adjArr[j] = s.adj[i]; }
     });
-    return {name:s.name, data:arr, raw:rawArr, color:s.color, seg:false, width: k===0?1.9:1.6, fill:false};
+    return {name:s.name, data:arr, raw:rawArr, adj:adjArr, color:s.color, seg:false, width: k===0?1.9:1.6, fill:false, altOn:s.altOn, pid: k===0 ? base.id : (atts[k-1] && atts[k-1].id)};
   });
   const vo = valOverlay(base, labels);
   if (vo){
@@ -974,6 +1074,23 @@ function inSessionNow(mk){
   const hm = (parseInt(o.hour, 10) % 24) * 60 + parseInt(o.minute, 10);
   return cfg.seg.some(s => hm >= s[0] && hm < s[1]);
 }
+/* 该市场当地时区的「今天」日期（YYYY-MM-DD），用于判断产物末点是否已跟进到今天 */
+function marketToday(mk){
+  const cfg = MKSEG[mk]; if (!cfg) return null;
+  try{
+    const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: cfg.tz, year:'numeric', month:'2-digit', day:'2-digit' });
+    return fmt.format(new Date());
+  }catch(e){ return null; }
+}
+/* 该市场当地时区的当前时刻（分钟数），用于区分「开盘前 / 盘中 / 收盘后」 */
+function marketMinutes(mk){
+  const cfg = MKSEG[mk]; if (!cfg) return null;
+  try{
+    const fmt = new Intl.DateTimeFormat('en-US', { timeZone: cfg.tz, hour12:false, hour:'2-digit', minute:'2-digit' });
+    const o = {}; for (const x of fmt.formatToParts(new Date())) o[x.type] = x.value;
+    return (parseInt(o.hour, 10) % 24) * 60 + parseInt(o.minute, 10);
+  }catch(e){ return null; }
+}
 /* ==================================================== 「最新」块的唯一出口
    【全站统一策略】「最新」= 最近一个【已收盘】交易日的收盘价，**不取盘中实时价**；
    右上角角标才是盘中实时价。二者收盘后自然相等、盘中刻意不同（这正是主人要的语义）。
@@ -1001,7 +1118,7 @@ function latestHTML(p, m){
   const mk = marketOf(p);
   if (mk && info && info.price != null && isFinite(info.price)){
     const usePrev = inSessionNow(mk) && info.prev != null && isFinite(info.prev);
-    const num = usePrev ? info.prev : info.price;
+    const num = anchorPriceOf(p, info);      // 与 qfqFactor 同一出口，保证三处价格严格一致
     const dp = isFinite(info.dp) ? info.dp : 2;
     const px = num.toLocaleString('zh-CN',
       {minimumFractionDigits:dp, maximumFractionDigits:dp});
@@ -1012,7 +1129,10 @@ function latestHTML(p, m){
       : ` <span class="${cls(raw)}">${fmtPct(raw)}</span>`;
     return `最新 <b>${px}${unitTxt}</b>${chg}`;
   }
-  const lastVal = (p.v[p.v.length-1]).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:4});
+  // 无盘中行情（场外基金、港售基金等）：取【当前口径】的末值，
+  // 保证「最新」与同卡片曲线末点、悬浮读数同源（市价口径下基金显示的就是单位净值）
+  const ser = (m && m.s && m.s.v && m.s.v.length) ? m.s.v : p.v;
+  const lastVal = (ser[ser.length-1]).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:4});
   return `最新 <b>${lastVal}${unitTxt}</b> <span class="${cls(m.lastChg*100)}">${fmtPct(m.lastChg*100)}</span>`;
 }
 
@@ -1037,6 +1157,60 @@ function positionOf(p, m){
   const min = Math.min(...s.v), max = Math.max(...s.v);
   if (!(max > min) || !(price > 0)) return null;
   return (price - min) / (max - min);
+}
+
+/* 前复权锚点＝产物末点对应的真实收盘价，与 latestHTML「最新」【同一出口、同一策略】：
+   盘中 → 前收（此时产物末点＝上一交易日）；收盘后 → 现价（＝当日收盘）。
+   两处共用这一个函数，才能保证 tooltip 末点数值与「最新」/右上角角标严格一致。 */
+function anchorPriceOf(p, info){
+  if (!info) return null;
+  const mk = marketOf(p);
+  if (mk && info.price != null && isFinite(info.price)){
+    const usePrev = inSessionNow(mk) && info.prev != null && isFinite(info.prev);
+    return usePrev ? info.prev : info.price;
+  }
+  if (info.price != null && isFinite(info.price)) return info.price;   // 商品/汇率：源不给前收，直接用现价
+  return (info.prev != null && isFinite(info.prev)) ? info.prev : null;
+}
+
+/* 曲线【末点】对应的真实收盘价。与 anchorPriceOf 的区别（关键）：
+   「最新」要的是"当下最近收盘价"，而曲线末点的日期可能还停在上一交易日
+   （产物每日更新一次，盘中/未更新时末点＝昨收）。此时若拿今天的收盘价当锚点，
+   整条前复权曲线会错一天（实测美的：末点日期 09-28 真值 82.00，用今日收盘锚定会显示 81.66）。
+   故：产物末点日期 ≠ 市场当地今天 ⇒ 锚点取【前收】（＝上一交易日收盘价）。 */
+function seriesAnchor(p, info, lastDate){
+  if (!info) return null;
+  const mk = marketOf(p); const cfg = mk ? MKSEG[mk] : null;
+  if (!cfg) return anchorPriceOf(p, info);
+  const pv = (info.prev != null && isFinite(info.prev)) ? info.prev : null;
+  const px = (info.price != null && isFinite(info.price)) ? info.price : null;
+
+  // ① 盘中：price 是实时价不是收盘价，末点日的真值只能取【前收】
+  if (inSessionNow(mk)) return pv != null ? pv : px;
+
+  const today = marketToday(mk);
+  // ② 产物已跟进到市场今天：price 就是那天的收盘价
+  if (today && lastDate && today === lastDate) return px != null ? px : pv;
+
+  // ③ 产物末点落后于市场今天（每日更新一次，常见）：
+  //    开盘前 → 行情源尚未换日，price 仍是上一交易日（＝末点日）的收盘价 ⇒ 取 price
+  //    收盘后 → 行情源已换日，price 是今天的收盘价，末点日的真值应取【前收】
+  const hm = marketMinutes(mk), open = cfg.seg && cfg.seg[0] ? cfg.seg[0][0] : 0;
+  const beforeOpen = (hm != null) && hm < open;
+  return beforeOpen ? (px != null ? px : pv) : (pv != null ? pv : px);
+}
+
+/* 等比前复权缩放系数 k = 末点真实收盘价 ÷ 末点后复权值（整条序列乘同一个常数，
+   ⇒ 收益曲线与后复权完全相同，只换价格读数）。
+   用途：① 前复权真序列缺失/窗口内出现非正值时的兜底；② 与锚点共用 seriesAnchor 出口，
+   保证「曲线末点 / 最新 / 右上角角标」三处价格严格一致。无实时数据（场外基金等）返回 null。 */
+function qfqFactor(p){
+  const info = (window.__rtData || {})[p.id];
+  const base = seriesAnchor(p, info, (p.d && p.d.length) ? p.d[p.d.length-1] : null);
+  const adjLast = (p.v && p.v.length) ? +p.v[p.v.length-1] : NaN;
+  if (base == null || !(adjLast > 0)) return null;
+  const k = base / adjLast;
+  return (isFinite(k) && k > 0) ? k : null;
 }
 
 /* 按 id 取回标的（供 __rtPaint 判定市场与时区），只建一次索引 */
@@ -1094,7 +1268,12 @@ window.__rtPaint = function(id, info){
   const price = info.price.toLocaleString('zh-CN',
     {minimumFractionDigits:dp, maximumFractionDigits:dp});
   const tag = info.tag ? info.tag + ' ' : '';
-  const premTxt = (info.prem != null && isFinite(info.prem))
+  /* 溢价率只对【场内基金/ETF】显示。
+     腾讯行情的 77/78 号字段对个股/指数返回的是别的含义（实测腾讯控股 00700.HK 会渲染出一个
+     毫无意义的"溢价率"），故按 secid 形态限定：沪市基金 1.5xxxxx、深市基金 0.15/16/18xxxxx。
+     个股（1.6xx / 0.00x）、指数（1.000xxx / 100.SPX）、港股（116.xxxxx）均不匹配。 */
+  const isExchFund = !!(p0 && /^(1\.5|0\.1[5-8])/.test(String(p0.secid || '')));
+  const premTxt = (isExchFund && info.prem != null && isFinite(info.prem))
     ? ' 溢' + fmtPct(info.prem) : '';
   el.innerHTML = tag + price + (hasChg ? ' <b>' + arrow + ' ' + fmtPct(chg) + '</b>' : '') + premTxt;
   const dt = fmtDataTime(info.ts);
@@ -1131,8 +1310,8 @@ function renderStats(p){
     <span class="stat">${isNaN(m.ann)?'—':'年化 <b class="'+cls(m.ann*100)+'">'+fmtPct(m.ann*100)+'</b>'}</span>
     <span class="stat" id="lt-${p.id}">${latestHTML(p, m)}</span>
     <span class="stat" style="color:var(--muted2)">${m.from} → ${m.to}</span>
-    ${m.trimmed ? `<span class="stat" style="color:#a3312a">⚠ 前复权早期股价失真（累计分红超出当期股价），
-       起点已顺延至 ${m.cutAt}；执行 <code>python update_data.py --full</code> 取后复权口径可修复</span>` : ''}`;
+    ${m.trimmed ? `<span class="stat" style="color:#a3312a">⚠ ${state.priceKind==='real' ? '前复权在长周期会因累计分红而失真（早期已为负）' : '序列早期含非正值'}，
+       起点已顺延至 ${m.cutAt}；切到「复权」口径可看完整历史</span>` : ''}`;
   // 配对子标的：在基准信息下新增整行（名称 + 与基准对齐的指标 + 实时角标）
   for (const a of pairedOf(p)){
     const ma = metrics(a); if (!ma) continue;
@@ -1261,8 +1440,9 @@ function renderCompare(){
    观察仓按「资产槽位」归类：日本 / 中国离岸港股 / 欧洲 / 台湾 / 韩国 / ASEAN /
    中国创新药 / 电网电气化 / 全球医疗生科。排序与标题都只依赖 products.json 的 slot 字段，
    新增槽位零代码（未列出的槽位按末尾处理）。 */
-const SLOT_ORDER = ['日本','中国A股Beta','中国A股Alpha','中国离岸/港股','欧洲','台湾','韩国','ASEAN',
-                    '澳大利亚','中国创新药','电网/电气化','全球医疗/生科'];
+const SLOT_ORDER = ['日本','中国A股/均衡','中国A股/成长','中国A股/低碳','中国A股/科技',
+                    '中国A股/机器人','中国A股/量化','中国A股Beta','中国A股Alpha','中国离岸/港股',
+                    '欧洲','台湾','韩国','ASEAN','澳大利亚','中国创新药','电网/电气化','全球医疗/生科'];
 function orderBySlot(list){
   if (!list.some(p => p.slot)) return list;
   const key = p => { const i = SLOT_ORDER.indexOf(p.slot); return i < 0 ? SLOT_ORDER.length : i; };
@@ -1276,6 +1456,59 @@ function orderBySlot(list){
     })
     .map(x => x.p);
 }
+/* ============================================================ 债市晴雨表
+   只挂在「债券基金」分组页顶部（中国国债收益率卡片之前），不新增数据源——
+   三个分项全部由 CNGB（中债国债收益率 1Y/3Y/10Y）现有序列算出：
+     · 利率水平：10Y 在近一年样本中的分位。高位＝未来下行空间大（利好债价）
+     · 短期动向：近 20 个交易日 10Y 变动 bp。下行＝债价走强
+     · 曲线形态：期限利差 10Y−1Y 及其近一年分位。陡＝宽松/复苏预期，平＝谨慎 */
+/* 综合结论只以 cmeta 的描述文案呈现（不挂彩色徽章） */
+const BARO = {
+  '晴':  {d:'收益率下行、环境顺风，久期仓位可持有'},
+  '多云': {d:'方向未明，以票息为主、久期中性'},
+  '阴':  {d:'收益率走平或小幅上行，压缩久期、重票息'},
+  '雨':  {d:'收益率明显上行，债价承压，缩短久期、留备用金'},
+};
+function bondBarometer(){
+  if (state.group !== '债券基金') return '';
+  const p = DATA.products.find(x => x.kind === 'yield' && x.y1 && x.y10 && x.d && x.d.length);
+  if (!p || p.d.length < 30) return '';
+  const n = p.d.length, win = Math.min(n, 244);
+  const last10 = +p.y10[n-1], last1 = +p.y1[n-1];
+  const chg20 = (p.y10[n-1] - p.y10[Math.max(0, n-21)]) * 100;
+  const pct = (arr, v) => {
+    const s = arr.slice(n - win).filter(x => isFinite(x));
+    if (!s.length) return null;
+    return s.filter(x => x <= v).length / s.length;
+  };
+  const spread = last10 - last1;
+  const sp = p.y10.map((x, i) => x - p.y1[i]);
+  const pLevel = pct(p.y10, last10), pSpread = pct(sp, spread);
+  if (pLevel == null || pSpread == null) return '';
+  const lvl = pLevel  >= 0.75 ? {t:'高位', s: 1} : (pLevel  <= 0.25 ? {t:'低位', s:-1} : {t:'中位', s: 0});
+  const mom = chg20   <= -5   ? {t:'下行', s: 2} : (chg20   >=  5   ? {t:'上行', s:-2} : {t:'走平', s: 0});
+  const crv = pSpread >= 0.75 ? {t:'陡峭', s: 1} : (pSpread <= 0.25 ? {t:'平坦', s:-1} : {t:'正常', s: 0});
+  const tot = lvl.s + mom.s + crv.s;
+  const tag = tot >= 3 ? '晴' : (tot >= 1 ? '多云' : (tot >= -1 ? '阴' : '雨'));
+  const b = BARO[tag];
+  const cell = (k, v, s) => `<div class="bcell"><div class="k">${k}</div>`
+                          + `<div class="v">${v}</div><div class="s">${s}</div></div>`;
+  return `<div class="card wide">
+    <div class="chead"><div style="min-width:0">
+      <div class="cname">债市晴雨表</div>
+      <div class="cmeta">中债国债收益率曲线 · 截至 ${p.d[n-1]} · ${b.d}</div>
+    </div></div>
+    <div class="bgrid">
+      ${cell('10Y 国债收益率', last10.toFixed(2) + '%',
+             `近一年分位 ${(pLevel*100).toFixed(0)}% · ${lvl.t}`)}
+      ${cell('近 20 日变动', (chg20 >= 0 ? '+' : '') + chg20.toFixed(0) + 'bp', `10Y · ${mom.t}`)}
+      ${cell('期限利差 10Y−1Y', (spread*100).toFixed(0) + 'bp',
+             `1Y ${last1.toFixed(2)}% · 近一年分位 ${(pSpread*100).toFixed(0)}% · ${crv.t}`)}
+    </div>
+    <div class="bnote">口径：分位＝该指标在近一年（${win} 个交易日）样本内的百分位；综合＝利率水平（高位 +1／低位 −1）＋ 短期动向（下行 +2／上行 −2）＋ 曲线形态（陡 +1／平 −1）。仅供参考，不构成投资建议。</div>
+  </div>`;
+}
+
 function gridHTML(list){
   let out = '', cur = Symbol('none');
   for (const p of list){
@@ -1293,7 +1526,7 @@ function renderGrid(){
   $('#cnt').textContent = `显示 ${list.length} / ${DATA.products.length}`;
   if (!list.length){ host.innerHTML = `<div class="empty">没有匹配的标的</div>`; $('#strip').innerHTML=''; return; }
   renderStrip(list);
-  host.innerHTML = gridHTML(list);
+  host.innerHTML = bondBarometer() + gridHTML(list);
   if (io) io.disconnect();
   io = new IntersectionObserver(ents => {
     ents.forEach(e => {
@@ -1305,7 +1538,8 @@ function renderGrid(){
       io.unobserve(e.target);
     });
   }, {rootMargin:'260px'});
-  host.querySelectorAll('.card').forEach(c => io.observe(c));
+  // 只观察带 data-id 的标的卡片：债市晴雨表等整块面板没有 data-id，喂给 renderStats 会抛
+  host.querySelectorAll('.card[data-id]').forEach(c => io.observe(c));
   // 回放待绘队列：fetchRealtime 可能比 renderGrid 先完成，先把数据存 RTPENDING，等卡片创建后再绘制
   if (window.__rtPaint && typeof window.__rtPaint === 'function'){
     for (const id in RTPENDING){
@@ -1376,7 +1610,7 @@ function zoom(p){
     if (charts.has(cv)) { charts.get(cv).destroy(); charts.delete(cv); }
     const vs = valSeries(p, L.x);
     // 同 drawChart：必须按 LTTB 采样下标取真值，不能直接给全量 s.v（长度与 L.y 不等会整体错位）
-    const base = {name:p.name, data:L.y.map(y=>+y.toFixed(3)), raw:L.idx.map(i=>s.v[i]), color:UP, fill:!vs, seg:true};
+    const base = {name:p.name, data:L.y.map(y=>+y.toFixed(3)), raw:L.idx.map(i=>s.v[i]), adj:L.idx.map(i=>s.adj[i]), color:UP, fill:!vs, seg:true, pid:p.id, altOn:m.altOn};
     if (vs) Object.assign(base, vs);
     // ⚠ 局部变量不能叫 vband：会遮蔽全局 vband() 函数，导致下面算档位时抛
     //   "vband is not a function"，整个统计行（含 PE/PB 分位）都渲染不出来。
@@ -1596,7 +1830,8 @@ function boot(){
   }
   $('#upd').textContent = DATA.updated || '—';
   $('#pcount').textContent = DATA.products.length;
-  if (DATA.note) $('#srcnote').textContent = DATA.note + '。数据来源：' + (DATA.source||'东方财富 / 天天基金') + '。仅供参考，历史收益不构成未来收益承诺。';
+  // 口径说明已统一放在页首「口径（工具栏切换）」一行，此处不再重复（此前与页首完全重复）
+  $('#srcnote').textContent = '数据来源：' + (DATA.source||'东方财富 / 天天基金') + '。仅供参考，历史收益不构成未来收益承诺。';
 
   // 数据新鲜度提示
   const ageH = DATA.updated ? (Date.now() - new Date(DATA.updated.replace(' ','T')).getTime())/3.6e6 : 1e9;
