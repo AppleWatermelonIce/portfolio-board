@@ -59,6 +59,20 @@ jobs:
           done
           echo "::warning::UPD_EXIT ${code}"
 
+      - name: 数据完整性自测（门禁：失败不部署）
+        # 离线校验 data/history 与 data/products.json（不联网）。
+        # 覆盖：基金分红还原(复权 v 不得退化为单位净值 u)、股票/ETF 前复权 q 存在且等长、
+        # 债券多期限序列、黄金已知分红基金 v 显著>u。
+        # 故意不沿用 continue-on-error —— 自测不过即阻断后续加密与部署(fail-closed)。
+        run: |
+          python scripts/test_data_integrity.py
+          code=$?
+          if [ $code -ne 0 ]; then
+            echo "::error::DATA_INTEGRITY 自测未通过，已阻断部署（详见上方 FAIL 明细）"
+            exit $code
+          fi
+          echo "::notice::DATA_INTEGRITY 自测通过"
+
       - name: 更新估值（蛋卷 + 中证A500 自算）
         run: python scripts/fetch_valuation.py
 

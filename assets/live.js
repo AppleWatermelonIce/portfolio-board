@@ -3,7 +3,8 @@
  *
  * 设计要点
  *   1. data.js 是基座（全历史），由 update_data.py 生成；本文件只补「尾部增量」。
- *   2. 增量结果存 localStorage（nv_live_v1），尾部保留 45 个点用于校验与对齐。
+ *   2. 增量结果存 localStorage（nv_live_v2），尾部保留 45 个点用于校验与对齐。
+ *      v2 起基金同时缓存单位净值（u）与复权净值（v），避免 u 过期导致市价口径尾部错位。
  *   3. 节流：距上次成功刷新不足 SCAN_GAP_MS 则不联网；页面常开时每 30 分钟自查一次。
  *   4. 通道（均为实测可用<em>无 Referer / 带 CORS 或可 JSONP</em>）：
  *        股票·ETF·指数·黄金 → 腾讯 newfqkline（fetch，ACAO=*，后复权 hfq）
@@ -19,7 +20,7 @@
 // 数据由 index.html 解密启动器在口令校验后注入 window.PORTFOLIO_DATA，再调用 __liveBoot
 let D = null;
 
-const KEY        = 'nv_live_v1';
+const KEY        = 'nv_live_v2';
 const SCAN_GAP   = 6 * 3600 * 1000;   // 6 小时内不重复联网（一天打开多次只刷一次）
 const TAIL_N     = 45;                // 每个标的缓存的尾部点数
 const PZ_CONC    = 1;                 // pingzhongdata 串行（文件大，且会写同名全局）
@@ -119,51 +120,56 @@ function loadScript(src, timeout) {
   });
 }
 
-function parseUnitMoney(s) {
-  let div = 0, ratio = 1;
-  if (!s) return [div, ratio];
-  s = String(s);
-  let m = s.match(/派现金\s*([0-9]*\.?[0-9]+)\s*元/);   if (m) div = parseFloat(m[1]) || 0;
-  m = s.match(/折算成?\s*([0-9]*\.?[0-9]+)\s*份/);      if (m) ratio = parseFloat(m[1]) || 1;
-  return [div, ratio];
+/* 天天基金 pingzhongdata 的日期解析（UTC 时间戳 +8h 后取 UTC 日期 = 北京时间日期） */
+function pzDate(ts) {
+  const t = new Date(ts + 8 * 3600e3);
+  return t.getUTCFullYear() + '-' + pad(t.getUTCMonth() + 1) + '-' + pad(t.getUTCDate());
 }
 
-/** 红利再投资复权净值 —— 与 update_data.py fetch_fund_nav 同一口径 */
-function navSeries(trend) {
-  const dates = [], navs = [], divs = [], splits = [];
+/** Data_netWorthTrend → 单位净值序列（y 字段）。前端「市价」口径用 p.u 绘制。 */
+function unitNavSeries(trend) {
+  const out = [];
   for (const it of trend) {
-    if (it.x == null || it.y == null) continue;
-    const [dv, rt] = parseUnitMoney(it.unitMoney || '');
-    const t = new Date(it.x + 8 * 3600e3);      // 时间戳按北京时间折算日期
-    dates.push(t.getUTCFullYear() + '-' + pad(t.getUTCMonth() + 1) + '-' + pad(t.getUTCDate()));
-    navs.push(parseFloat(it.y)); divs.push(dv); splits.push(rt);
+    const ts = Array.isArray(it) ? it[0] : it.x;
+    const val = Array.isArray(it) ? it[1] : it.y;
+    if (ts == null || val == null) continue;
+    out.push([pzDate(ts), parseFloat(val)]);
   }
-  const n = navs.length;
-  if (!n) throw new Error('净值序列为空');
+  return out;
+}
 
-  const eff = [], divEff = [];
-  let cum = 1;
-  for (let i = 0; i < n; i++) { cum *= splits[i]; eff.push(navs[i] * cum); divEff.push(divs[i] * cum); }
-
-  const R = [1]; let r = 1;
-  for (let i = 1; i < n; i++) {
-    const prev = eff[i - 1];
-    if (prev && prev > 0) r *= 1 + (eff[i] + divEff[i] - prev) / prev;
-    R.push(r);
+/** Data_ACWorthTrend → 复权净值序列（已含红利再投资）。前端「复权」口径用 p.v 绘制。
+ *  注：2026-10 实测 Data_netWorthTrend 的 unitMoney 字段不再携带分红金额，
+ *  前端无法像 update_data.py 那样从 unitMoney 计算复权净值，故直接取官方 ACWorthTrend。
+ *  Data_ACWorthTrend 每项为 [timestamp, value] 数组，与 Data_netWorthTrend 的 {x,y} 对象不同。 */
+function acWorthSeries(trend) {
+  const out = [];
+  for (const it of trend) {
+    const ts = Array.isArray(it) ? it[0] : it.x;
+    const val = Array.isArray(it) ? it[1] : it.y;
+    if (ts == null || val == null) continue;
+    out.push([pzDate(ts), parseFloat(val)]);
   }
-  const base = navs[0];
-  const map = new Map();
-  for (let i = 0; i < n; i++) map.set(dates[i], +(R[i] * base).toFixed(6));
-  const ds = [...map.keys()].sort();
-  return ds.map(d => [d, map.get(d)]);
+  return out;
 }
 
 async function pzGet(code) {
   window.Data_netWorthTrend = null;              // 防止上一只基金的残留被误读
+  window.Data_ACWorthTrend = null;
   await loadScript('https://fund.eastmoney.com/pingzhongdata/' + code + '.js', 30000);
   const tr = window.Data_netWorthTrend;
+  const ac = window.Data_ACWorthTrend;
   if (!tr || !tr.length) throw new Error('无净值数据');
-  return navSeries(tr);
+  const unit = unitNavSeries(tr);
+  const adj = acWorthSeries(ac || []);
+  // 只保留两份数据都有的日期，确保后续 p.d / p.u / p.v 三轴对齐
+  const unitMap = new Map(unit);
+  const adjMap = new Map(adj);
+  const common = [...unitMap.keys()].filter(d => adjMap.has(d)).sort();
+  return {
+    unit: common.map(d => [d, unitMap.get(d)]),
+    ac:   common.map(d => [d, adjMap.get(d)]),
+  };
 }
 
 /* ------------------------------------- ③ Frankfurter(ECB) 日频汇率 */
@@ -358,10 +364,14 @@ async function fetchRealtime(){
 }
 
 /* ------------------------------------------------------------- 合并写回 */
-/** 返回 {added, changed}；-1 表示重叠不足不敢合并 */
-function applyPoints(p, pts) {
+/** 返回 {added, changed}；-1 表示重叠不足不敢合并。
+ *  target 指定要写入的序列键，默认 'v'；用于基金同时更新 u（单位净值）与 v（复权净值）。 */
+function applyPoints(p, pts, target = 'v') {
+  const seq = p[target];
+  if (!seq || !seq.length) return null;
   const m = new Map();
-  for (let i = 0; i < p.d.length; i++) m.set(p.d[i], p.v[i]);
+  const len = Math.min(p.d.length, seq.length);
+  for (let i = 0; i < len; i++) m.set(p.d[i], seq[i]);
   if (!m.size) return { added: 0, changed: 0 };
 
   const ratios = [];
@@ -381,16 +391,57 @@ function applyPoints(p, pts) {
     m.set(d, nv);
   }
   const ds = [...m.keys()].sort();
-  p.d = ds; p.v = ds.map(d => m.get(d));
+  p.d = ds; p[target] = ds.map(d => m.get(d));
   p.last = ds[ds.length - 1];
   return { added, changed };
 }
 
-const tail = p => {
-  const s = Math.max(0, p.d.length - TAIL_N), out = [];
-  for (let i = s; i < p.d.length; i++) out.push([p.d[i], +(+p.v[i]).toFixed(6)]);
+/** 仅追加新日期的收益率，不覆盖历史值。用于基金复权净值 p.v：
+ *  天天基金 ACWorthTrend 与本地 p.v 的基准/复权口径存在长期漂移，
+ *  直接按中位数比例缩放会让末点偏离；本函数以「最近重叠日」为锚，
+ *  把 ACWorthTrend 的后续收益率接到本地 p.v 上，保持曲线连续且末点准确。 */
+function appendReturns(p, pts, target = 'v') {
+  const seq = p[target];
+  if (!seq || !seq.length) return null;
+  const ptsMap = new Map(pts);
+  const len = Math.min(p.d.length, seq.length);
+  let lastIdx = -1, lastPt = null;
+  for (let i = len - 1; i >= 0; i--) {
+    if (ptsMap.has(p.d[i])) {
+      lastIdx = i;
+      lastPt = ptsMap.get(p.d[i]);
+      break;
+    }
+  }
+  if (lastIdx < 0 || !(lastPt > 0)) return null;
+  const base = seq[lastIdx];
+  if (!(base > 0)) return null;
+
+  const m = new Map();
+  for (let i = 0; i < len; i++) m.set(p.d[i], seq[i]);
+
+  let added = 0;
+  for (const [d, v] of pts) {
+    if (m.has(d)) continue;
+    m.set(d, base * (v / lastPt));
+    added++;
+  }
+  if (!added) return { added: 0, changed: 0 };
+  const ds = [...m.keys()].sort();
+  p.d = ds; p[target] = ds.map(d => m.get(d));
+  p.last = ds[ds.length - 1];
+  return { added, changed: 0 };
+}
+
+const tailOf = (d, v) => {
+  if (!v || !v.length) return [];
+  const s = Math.max(0, d.length - TAIL_N), out = [];
+  for (let i = s; i < d.length; i++) {
+    if (i < v.length) out.push([d[i], +(+v[i]).toFixed(6)]);
+  }
   return out;
 };
+const tail = p => ({ v: tailOf(p.d, p.v), u: tailOf(p.d, p.u) });
 
 function loadRec() {
   try { return JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { return null; }
@@ -399,9 +450,18 @@ function applyRec(rec) {
   if (!rec || !rec.items) return 0;
   let n = 0;
   for (const p of D.products) {
-    const pts = rec.items[p.id];
-    if (!pts || !pts.length) continue;
-    if (applyPoints(p, pts)) n++;
+    const item = rec.items[p.id];
+    if (!item) continue;
+    // 兼容 v1 格式：[[date, v], ...]；v2 格式：{ v: [...], u: [...] }
+    let vPts = null, uPts = null;
+    if (Array.isArray(item)) {
+      vPts = item;
+    } else {
+      vPts = item.v; uPts = item.u;
+    }
+    let touched = false;
+    if (vPts && vPts.length && applyPoints(p, vPts, 'v')) { n++; touched = true; }
+    if (uPts && uPts.length && applyPoints(p, uPts, 'u')) { if (!touched) n++; }
   }
   return n;
 }
@@ -521,10 +581,14 @@ async function refresh(force) {
   if (needFunds.length) {
     await pool(needFunds, PZ_CONC, async ({ p, c }) => {
       const rows = await pzGet(c.id);
-      const r = applyPoints(p, rows);
+      // 基金要同时维护 u（单位净值）与 v（复权净值）：
+      // 1) v 用 appendReturns：ACWorthTrend 与本地 p.v 基准存在长期漂移，只取最新收益率接到本地末尾；
+      // 2) u 用 applyPoints：单位净值口径一致，可直接合并对齐。
+      const rv = appendReturns(p, rows.ac, 'v');
+      const ru = applyPoints(p, rows.unit, 'u');
       done++; tick();
-      if (!r) errs.push(p.name + '(无重叠)');
-      else if (r.added || r.changed) touched++;
+      if (!rv || !ru) errs.push(p.name + '(无重叠)');
+      else if ((rv.added + rv.changed + ru.added + ru.changed) > 0) touched++;
       await new Promise(s => setTimeout(s, 120));   // 串行且放慢，避免被限流
     });
   }

@@ -634,16 +634,54 @@ def fetch_fund_nav(code):
     if not trend:
         raise RuntimeError(f"Data_netWorthTrend 为空 code={code}")
 
-    dates, navs, divs, splits = [], [], [], []
+    dates, navs, splits = [], [], []
     for it in trend:
         ts, y = it.get("x"), it.get("y")
         if ts is None or y is None:
             continue
-        d_, s_ = parse_unit_money(it.get("unitMoney") or "")
+        _d, _s = parse_unit_money(it.get("unitMoney") or "")
         dates.append(datetime.fromtimestamp(ts / 1000, CN).strftime("%Y-%m-%d"))
-        navs.append(float(y)); divs.append(d_); splits.append(s_)
+        navs.append(float(y)); splits.append(_s)
 
     n = len(navs)
+
+    # 累计净值（ac）：累计净值 = 单位净值 + 成立以来累计单位分红。
+    # ⚠ 2026 起 Data_netWorthTrend 的 unitMoney 不再携带分红金额（"分红：每10份派现金元"缺数字），
+    #   故改为从 ac 与 unit 的差额「回推」每日分红：gap[i]=ac[i]-unit[i]，div[i]=gap[i]-gap[i-1]。
+    #   分红日单位净值下跌、累计净值连续 → gap 在分红日跳升，正好还原出现金分红额；
+    #   份额折算日 unit 与 ac 同比例下跌 → gap 不变，不会误判为分红。此法对所有分红基金稳健。
+    ac_map = {}
+    try:
+        ac = json.loads(_grab(txt, "Data_ACWorthTrend"))
+        for it in ac:
+            ts, y = it[0], it[1]
+            if ts is None or y is None:
+                continue
+            ac_map[datetime.fromtimestamp(ts / 1000, CN).strftime("%Y-%m-%d")] = float(y)
+    except Exception:
+        ac_map = {}
+
+    divs = [0.0] * n
+    if len(ac_map) >= max(2, int(n * 0.5)):          # ac 与 unit 日期轴足够对齐才启用回推
+        prev_gap = None
+        for i, d in enumerate(dates):
+            a = ac_map.get(d)
+            if a is None:
+                continue
+            gap = a - navs[i]
+            if prev_gap is not None:
+                dv = gap - prev_gap
+                if dv > 1e-4:                        # 仅「累计分红」上行段计为分红，过滤舍入噪声
+                    divs[i] = dv
+            prev_gap = gap
+    else:
+        # 兜底：ac 缺失/错位，退回 unitMoney 解析（旧逻辑）
+        for i, it in enumerate(trend):
+            if it.get("x") is None:
+                continue
+            _d, _s = parse_unit_money(it.get("unitMoney") or "")
+            divs[i] = _d
+
     # 累积份额折算因子 -> 把拆分前后拉回同一份额基准
     cum, eff, div_eff, n_div, n_spl = 1.0, [], [], 0, 0
     for i in range(n):
@@ -662,21 +700,21 @@ def fetch_fund_nav(code):
     vals = [round(x * base, 6) for x in R]
     # 单位净值（u）：Data_netWorthTrend 的 y，就是基金每天公布的、不含红利再投资的净值。
     # 前端「市价」口径画这条曲线，「复权」口径画 vals（红利再投资复权净值）。
-    # 份额折算同样会让单位净值出现假瀑布，故与 vals 走同一套 fix_splits 校正（见 update_one）。
     navs = [round(x, 6) for x in navs]
+    # 累计分红末点：累计净值(ac) - 单位净值(unit)。>0 即该基金历史上有现金分红，
+    # 复权净值 v 应据此含红利再投资（v[-1] 明显高于 u[-1]）。写入 history 供自测作"是否有分红"真值，
+    # 避免自测仅凭日跌幅误判（股混基金市场大跌日 u/v 同跌，并非分红未还原）。
+    _ac_end = ac_map.get(dates[-1]) if (ac_map and dates) else None
+    div_cum = round(float(_ac_end) - navs[-1], 6) if _ac_end else 0.0
 
     warn = ""
-    try:
-        ac = json.loads(_grab(txt, "Data_ACWorthTrend"))
-        if ac and ac[0][1] and ac[-1][1] > 0 and R[-1] > 0:
-            years = max((n - 1) / 244.0, 1e-6)
-            ac_ratio = ac[-1][1] / ac[0][1]
-            if n_div > 0:
-                gap = ((R[-1] / ac_ratio) ** (1.0 / years) - 1.0) * 100.0
-                warn = f"分红{n_div}次/拆分{n_spl}次；复权较累计净值年化高 {gap:+.2f}pp（含红利再投资收益）"
-    except Exception:
-        pass
-    return dates, vals, navs, warn
+    if ac_map and dates[0] in ac_map and dates[-1] in ac_map and ac_map[dates[0]] and ac_map[dates[-1]] > 0 and R[-1] > 0:
+        years = max((n - 1) / 244.0, 1e-6)
+        ac_ratio = ac_map[dates[-1]] / ac_map[dates[0]]
+        if n_div > 0:
+            gap = ((R[-1] / ac_ratio) ** (1.0 / years) - 1.0) * 100.0
+            warn = f"分红{n_div}次/拆分{n_spl}次；复权较累计净值年化高 {gap:+.2f}pp（含红利再投资收益）"
+    return dates, vals, navs, warn, div_cum
 
 
 # ---------------------------------------------------------------- 本地历史
@@ -813,8 +851,9 @@ def update_one(p, full):
     warn = "",
     extra = {}
     unav = None          # 单位净值（仅基金，前端「市价」口径用）
+    div_cum = 0.0        # 累计分红末点（仅基金，self-test 判"是否有分红"真值）
     if p["src"] == "fund":
-        dates, vals, unav, warn = fetch_fund_nav(p["secid"])
+        dates, vals, unav, warn, div_cum = fetch_fund_nav(p["secid"])
         channel = "天天基金"
     elif p["src"] == "goldcny":
         dates, vals = fetch_gold_cny(p, need_full, beg_since)
@@ -886,6 +925,8 @@ def update_one(p, full):
     }
     if unav and len(unav) == len(dates):
         obj["u"] = unav                    # 单位净值（基金「市价」口径）
+    if p["src"] == "fund":
+        obj["divCum"] = div_cum            # 累计分红末点(元/份)；self-test 判"是否有分红"真值(0 即无分红)
     if qser and len(qser) == len(dates):
         obj["q"] = qser                    # 前复权收盘价（股票/ETF/指数「市价」口径）
     obj.update(meta_of(p))             # 前端元信息：slot / pair / prem

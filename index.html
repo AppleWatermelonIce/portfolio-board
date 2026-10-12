@@ -223,7 +223,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--line);font-si
     <div class="row">
       <span class="lab">区间</span>
       <div class="tabs" id="ranges"></div>
-      <span class="lab" style="margin-left:14px">口径</span>
+      <span class="lab" style="margin-left:14px" title="价格口径（切换同时改变价格读数与收益曲线）：&#10;· 市价（与行情软件 / 天天基金显示一致）：股票/ETF＝前复权（末点＝真实收盘价）；基金＝单位净值（分红日有跳变，与 App 一致）；债券＝收益率曲线。&#10;· 复权（真实总回报口径）：股票/ETF＝后复权；基金＝红利再投资复权净值（含分红再投，无跳变）；债券＝同收益率曲线。&#10;想对齐 App 显示价看「市价」，想看含分红的真实收益看「复权」。">口径</span>
       <div class="tabs" id="priceKinds"></div>
       <div class="spacer"></div>
       <input type="text" id="q" placeholder="搜索名称 / 代码" style="width:172px">
@@ -726,7 +726,7 @@ function renderToolbar(){
   $('#priceKinds').innerHTML = [
     {k:'real', t:'市价'},
     {k:'adj',  t:'复权'},
-  ].map(o => `<button class="tab${state.priceKind===o.k?' on':''}" data-pk="${o.k}" title="价格口径（切换会同时改变价格读数与收益曲线）：${'　'}市价＝股票/ETF 前复权（与行情软件一致的减法式，末点＝真实收盘价，与角标/「最新」一致）、基金单位净值；复权＝股票/ETF 后复权、基金红利再投资复权净值（总回报口径）。减法式前复权的区间收益与后复权不相等（前者含累计分红被减去的基数效应），属口径差异而非数据错误。">${o.t}</button>`).join('');
+  ].map(o => `<button class="tab${state.priceKind===o.k?' on':''}" data-pk="${o.k}">${o.t}</button>`).join('');
   $('#priceKinds').querySelectorAll('.tab').forEach(b =>
     b.onclick = () => { state.priceKind = b.dataset.pk; renderAll(); });
 
