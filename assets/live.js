@@ -369,6 +369,7 @@ async function fetchRealtime(){
 function applyPoints(p, pts, target = 'v') {
   const seq = p[target];
   if (!seq || !seq.length) return null;
+  const oldD = p.d, oldSeq = seq, oldQ = p.q;   // 捕获改写前的日期/序列/前复权，用于下方同步补齐 p.q
   const m = new Map();
   const len = Math.min(p.d.length, seq.length);
   for (let i = 0; i < len; i++) m.set(p.d[i], seq[i]);
@@ -393,6 +394,28 @@ function applyPoints(p, pts, target = 'v') {
   const ds = [...m.keys()].sort();
   p.d = ds; p[target] = ds.map(d => m.get(d));
   p.last = ds[ds.length - 1];
+
+  // 【修复】增量刷新只回写 p.v，会让股票/ETF 的前复权 p.q 短于 p.d，
+  // 导致市价口径在渲染时依赖 qfqFactor 兜底（首屏竞态可能偶发显示异常）。
+  // 此处用"末点 q/v 比例"把新增交易日等比补齐，使 p.q 与 p.d 重新等长、同源，
+  // 与 index.html 中 altSeriesOf 的等比前复权口径完全一致，且不依赖实时锚点是否就绪。
+  if (target === 'v' && oldQ && oldQ.length) {
+    const qm = new Map();
+    const qn = Math.min(oldD.length, oldQ.length);
+    for (let i = 0; i < qn; i++) qm.set(oldD[i], oldQ[i]);
+    let kq = null;   // 取最后一个"q、v 均有效"的共同点作为常数比例
+    for (let i = qn - 1; i >= 0; i--) {
+      if (oldQ[i] != null && isFinite(oldQ[i]) && oldSeq[i] > 0) { kq = oldQ[i] / oldSeq[i]; break; }
+    }
+    if (kq != null && isFinite(kq) && kq > 0) {
+      const out = [];
+      for (let i = 0; i < ds.length; i++) {
+        const d = ds[i];
+        out.push(qm.has(d) ? qm.get(d) : p[target][i] * kq);   // 旧日期沿用真序列，新日期等比补齐
+      }
+      p.q = out;
+    }
+  }
   return { added, changed };
 }
 

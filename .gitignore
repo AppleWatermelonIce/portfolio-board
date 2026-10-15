@@ -13,6 +13,9 @@ data/valuation/_tmp*/
 # 测试截图
 tools/_screenshots/
 
+# 本地每日估值更新的日志与失败标记（本机产物，不入库）
+logs/
+
 # Actions 部署中间产物（每轮重建，不入仓）
 public/
 

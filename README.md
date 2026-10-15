@@ -25,6 +25,7 @@ portfolio-board/
 │   ├── fetch_valuation.py  ← 抓指数 PE/PB（蛋卷 3 个 + A500 自算，全免 key）
 │   ├── calc_a500.py        ← 中证A500 估值自算：中证官网官方 PE + 自算 ROE（免 key）
 │   ├── build_valuation_js.py ← 打包 valuation/*.json → assets/valuation.js
+│   ├── update_valuation.py ← ★ 本地每日估值更新编排（抓取→打包→核对→故障标记）
 │   ├── check_valuation.py  ← 自算分位 vs 官方分位交叉验证（差 <3pp 才采信）
 │   └── repair_hfq.py       ← 前复权误用修复（问题已根治，仅作故障备用）
 ├── tools/                  ← 自检脚本，与运行无关
@@ -34,7 +35,9 @@ portfolio-board/
 │   ├── browser_test*.js    ← 真实 Chrome（CDP）实测：刷新/节流/估值色带/区间与窗口
 │   ├── test_fund_nav.py    ← 基金复权净值口径自测
 │   └── _screenshots/       ← 测试截图产物
-├── 一键更新.bat            ← 双击重建全历史
+├── 一键更新.bat            ← 双击重建全历史（行情）
+├── 每日更新估值.bat        ← 双击/计划任务：刷新本地指数 PE/PB
+├── logs/                   ← 本地估值更新日志 + 失败标记（不入库）
 ├── .gitignore
 └── README.md
 ```
@@ -60,6 +63,33 @@ python scripts\update_data.py SH000510   :: 只更新指定 id
 python scripts\fetch_valuation.py        :: 抓 4 个指数的 PE/PB 序列 → data/valuation/
 python scripts\build_valuation_js.py     :: 打包 → assets/valuation.js（含 5 档分位阈值）
 python scripts\check_valuation.py        :: 可选：与蛋卷官方分位交叉验证
+```
+
+> ⚠ **页面自动刷新只补行情，不补估值**：`assets/live.js` 里没有任何估值逻辑。
+> 线上站点由 GitHub Actions 每天 23:30（北京时间）重算并部署，但**本机 `file://`
+> 打开的那份读的是本地 `assets/valuation.js`，不会自己变新**。
+
+**本地每日自动更新估值**（纯脚本，不依赖 AI、不依赖 GitHub）：
+
+```bat
+每日更新估值.bat                       :: 双击立即跑一次
+python scripts\update_valuation.py     :: 同上（命令行）
+```
+
+已注册 Windows 计划任务「portfolio-board 估值每日更新」，每天 **23:50** 跑一次；
+若当时关机，开机后补跑（`StartWhenAvailable`）。任务只在登录时运行，无需存密码。
+
+- 日志：`logs/估值更新_YYYY-MM.log`（追加）
+- 失败：写 `logs/估值更新失败.md`，并返回退出码 1（任务「上次运行结果」会显示非 0）
+- 判定：任一步骤退出码非 0 / 抓取输出含 `[ERR]` / 4 个指数任一估值文件缺失或损坏 → **失败**；
+  某指数序列 > 12 天未前进 → 只**告警**不失败（蛋卷为周频，正常滞后 3~7 天）
+
+管理该任务：
+
+```bat
+schtasks /Query  /TN "portfolio-board 估值每日更新" /V /FO LIST
+schtasks /Run    /TN "portfolio-board 估值每日更新"
+schtasks /Delete /TN "portfolio-board 估值每日更新" /F
 ```
 
 A500 单独重算（财务结果有缓存，首次约 4 分钟，之后秒级）：
@@ -179,5 +209,10 @@ A500 通道只依赖**中证官网 + 东财 F10 + 东财基金持仓**三个公�
 
 - `index.html` 在根，相对路径按此结构写死，**不要单独挪动 `assets/` 下的文件名**。
 - 脚本里的时间按**北京时间**换算（腾讯/天天基金数据以北京时间为准），服务器时区无所谓。
+  但估值 JSON 的 `updated` 字段取的是**运行机器的本地时间**：CI 跑在 UTC runner 上，
+  所以线上显示的 `updated` 比北京时间早 8 小时（显示 `22:35` ＝ 次日北京 `06:35`），
+  别误读成"没更新"；本地计划任务跑出来的则是正确的北京时间。
+- 估值序列陈旧告警阈值在页面里是 **30 天**（`index.html` 的 `stale` 判定），
+  本地脚本用的是 **12 天**，后者更早发现问题。
 - `assets/live.js` 的自动刷新依赖浏览器能直连腾讯/天天基金/Frankfurter；
   若部署在纯内网，请改用方案 A 的"本地生成 + 同步"，或关掉页面上的自动刷新。
