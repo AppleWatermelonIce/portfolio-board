@@ -1465,12 +1465,17 @@ function renderCompare(){
 /* ---------------------------------------------------------- 槽位（二级分类）
    观察仓按「资产槽位」归类：日本 / 中国离岸港股 / 欧洲 / 台湾 / 韩国 / ASEAN /
    中国创新药 / 电网电气化 / 全球医疗生科。债券基金按穿透后的债券类型分组：利率债 / 信用债 /
-   同业存单 / 可转债（久期用卡片角标 dur 区分，不占用槽位）。
+   同业存单 / 可转债；组内再按久期从长到短排序（长久期 > 中长久期 > 短久期 > 固含股 > 无），
+   久期同时以卡片角标（dur）展示。
    排序与标题都只依赖 products.json 的 slot 字段，新增槽位零代码（未列出的槽位按末尾处理）。 */
 const SLOT_ORDER = ['日本','中国A股/均衡','中国A股/成长','中国A股/低碳','中国A股/科技',
                     '中国A股/机器人','中国A股/量化','中国A股Beta','中国A股Alpha','中国离岸/港股',
                     '欧洲','台湾','韩国','ASEAN','澳大利亚','中国创新药','电网/电气化','全球医疗/生科',
                     '利率债','信用债','同业存单','可转债'];
+/* 久期排序：同一槽位（尤其债券基金）内按久期从长到短排列。
+   长久期 > 中长久期 > 短久期 > 固含股（混合策略）> 无久期（如收益率曲线 CNGB）。 */
+const DUR_RANK = {'长久期':0,'中长久期':1,'短久期':2,'固含股':3};
+function durRank(p){ return p.dur && (p.dur in DUR_RANK) ? DUR_RANK[p.dur] : 9; }
 function orderBySlot(list){
   if (!list.some(p => p.slot)) return list;
   const key = p => { const i = SLOT_ORDER.indexOf(p.slot); return i < 0 ? SLOT_ORDER.length : i; };
@@ -1480,7 +1485,9 @@ function orderBySlot(list){
       if (!sa && !sb) return a.i - b.i;                 // 无槽位的保持原有顺序在前
       if (!sa) return -1;
       if (!sb) return 1;
-      return key(a.p) - key(b.p) || a.i - b.i;          // 同槽位内保持在清单里的先后
+      return key(a.p) - key(b.p)                        // 先按槽位
+        || durRank(a.p) - durRank(b.p)                  // 同槽位内按久期（长→短）
+        || a.i - b.i;                                   // 仍相同则保持清单先后
     })
     .map(x => x.p);
 }
