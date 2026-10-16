@@ -115,6 +115,11 @@ input:focus,select:focus{border-color:var(--accent)}
 .slothead::after{content:"";flex:1;height:1px;background:var(--line)}
 .chead{display:flex;align-items:flex-start;gap:10px;margin-bottom:2px}
 .cname{font-size:14.5px;font-weight:620;letter-spacing:-.1px;min-width:0}
+.durbadge{display:inline-block;font-size:10.5px;font-weight:650;padding:1px 7px;border-radius:6px;margin-left:7px;vertical-align:middle;letter-spacing:-.1px;border:1px solid transparent;white-space:nowrap}
+.durbadge.dur-short{background:#e7f6ee;color:#12a05c;border-color:#bfe8d2}
+.durbadge.dur-mid{background:#eaf1fb;color:#2a6bd0;border-color:#bcd3f2}
+.durbadge.dur-long{background:#fdf0e0;color:#c26a06;border-color:#f6d8ac}
+.durbadge.dur-hybrid{background:#f1ecfd;color:#7c4ddb;border-color:#d9ccf7}
 .cmeta{font-size:11.5px;color:var(--muted2);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cact{margin-left:auto;display:flex;gap:4px;flex:none}
 .icon{
@@ -1023,11 +1028,12 @@ function drawYieldChart(canvas, p){
 }
 
 /* ============================================================ 卡片 */
+const DUR_CLS = {'短久期':'dur-short','中长久期':'dur-mid','长久期':'dur-long','固含股':'dur-hybrid'};
 function cardHTML(p, i){
   return `<div class="card" data-id="${p.id}">
     <div class="chead">
       <div style="min-width:0">
-        <div class="cname">${p.name}<span id="vb-${p.id}"></span></div>
+        <div class="cname">${p.name}${p.dur?`<span class="durbadge ${DUR_CLS[p.dur]||''}">${p.dur}</span>`:''}<span id="vb-${p.id}"></span></div>
         <div class="cmeta">${p.code} · ${p.slot || p.group}${p.note?' · '+p.note:''}</div>
       </div>
       <div class="cact">
@@ -1458,11 +1464,13 @@ function renderCompare(){
 
 /* ---------------------------------------------------------- 槽位（二级分类）
    观察仓按「资产槽位」归类：日本 / 中国离岸港股 / 欧洲 / 台湾 / 韩国 / ASEAN /
-   中国创新药 / 电网电气化 / 全球医疗生科。排序与标题都只依赖 products.json 的 slot 字段，
-   新增槽位零代码（未列出的槽位按末尾处理）。 */
+   中国创新药 / 电网电气化 / 全球医疗生科。债券基金按穿透后的债券类型分组：利率债 / 信用债 /
+   同业存单 / 可转债（久期用卡片角标 dur 区分，不占用槽位）。
+   排序与标题都只依赖 products.json 的 slot 字段，新增槽位零代码（未列出的槽位按末尾处理）。 */
 const SLOT_ORDER = ['日本','中国A股/均衡','中国A股/成长','中国A股/低碳','中国A股/科技',
                     '中国A股/机器人','中国A股/量化','中国A股Beta','中国A股Alpha','中国离岸/港股',
-                    '欧洲','台湾','韩国','ASEAN','澳大利亚','中国创新药','电网/电气化','全球医疗/生科'];
+                    '欧洲','台湾','韩国','ASEAN','澳大利亚','中国创新药','电网/电气化','全球医疗/生科',
+                    '利率债','信用债','同业存单','可转债'];
 function orderBySlot(list){
   if (!list.some(p => p.slot)) return list;
   const key = p => { const i = SLOT_ORDER.indexOf(p.slot); return i < 0 ? SLOT_ORDER.length : i; };
@@ -1619,7 +1627,7 @@ function zoom(p){
    溢价率(prem)、降级链(chan/chan2/secid2)、收益率标的(kind) 会全部静默失效——本文件曾因此丢过 pair/prem。
    【新增标的字段时，本清单与 update_data.py::meta_of() 都要补。】 */
 const PRODUCT_KEYS = ['id','name','code','group','src','secid','unit','note',
-                      'slot','chan','chan2','secid2','pair','prem','kind'];
+                      'slot','dur','chan','chan2','secid2','pair','prem','kind'];
 function rebuildProductsJSON(){
   const arr = DATA.products.map(p => {
     const o = {};
