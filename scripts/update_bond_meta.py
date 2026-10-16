@@ -130,10 +130,10 @@ def patch_products(data):
         obj["dur"] = r["dur"]
         obj["note"] = "穿透(26-06-30)：" + "/".join(f"{k}{v}%" for k, v in r["disp"].items() if v > 0)
         pj = pj[:m.start()] + json.dumps(obj, ensure_ascii=False) + pj[m.end():]
-    # CNGB 国债收益率曲线 → 利率债 槽位
+    # CNGB 国债收益率曲线 → 独立槽位（置于全站第一组，作债券板块的利率基准）
     m = re.search(r'\{"id": "CNGB"[^{}]*\}', pj, re.S)
     if m:
-        obj = json.loads(m.group(0)); obj["slot"] = "利率债"
+        obj = json.loads(m.group(0)); obj["slot"] = "国债收益率曲线"
         pj = pj[:m.start()] + json.dumps(obj, ensure_ascii=False) + pj[m.end():]
     # 缺失的债券基金自动插入到 006431 之后
     missing = [c for c in data if not re.search(r'\{"id": "' + re.escape(c) + r'"', pj)]
