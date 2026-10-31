@@ -1,23 +1,32 @@
 @echo off
-chcp 65001 >nul
+chcp 936 >nul
 cd /d "%~dp0"
+
 echo ============================================================
-echo   æŒä»“å‡€å€¼æ›²çº¿ â€”â€” å…¨å†å²é‡å»º
-echo   ä¼šæŠŠæœ€æ–°æ•°æ®å†™è¿› data.js / historyï¼Œæµè§ˆå™¨ä¸‹æ¬¡æ‰“å¼€è‡ªåŠ¨æ¥ç»­
+echo   ³Ö²Ö¾»ÖµÇúÏß ¡ª¡ª È«ÀúÊ·ÖØ½¨
+echo   »á°Ñ×îĞÂÊı¾İĞ´½ø data.js / history£¬ä¯ÀÀÆ÷ÏÂ´Î´ò¿ª×Ô¶¯½ÓĞø
 echo ============================================================
 echo.
 
-set PY=C:\Users\Maple\.workbuddy\binaries\python\versions\3.13.12\python.exe
-if not exist "%PY%" set PY=python
+set RC=1
 
-"%PY%" "%~dp0scripts\update_data.py" %*
+where py >nul 2>nul
+if errorlevel 1 goto try_python
+py -3 "%~dp0scripts\update_data.py" %*
+set RC=%ERRORLEVEL%
+goto report
+
+:try_python
+python "%~dp0scripts\update_data.py" %*
 set RC=%ERRORLEVEL%
 
+:report
 echo.
-if "%RC%"=="0" (
-  echo [å®Œæˆ] data.js å·²æ›´æ–°
-) else (
-  echo [æ³¨æ„] é€€å‡ºç  %RC%ï¼šå¯èƒ½æœ‰æ ‡çš„æŠ“å–å¤±è´¥ï¼Œå·²æ²¿ç”¨æ—§æ•°æ®ï¼Œè¯¦æƒ…è§ä¸Šæ–¹è¾“å‡º
-)
+if "%RC%"=="0" goto ok
+echo [×¢Òâ] ÍË³öÂë %RC%£º¿ÉÄÜÓĞ±êµÄ×¥È¡Ê§°Ü£¬ÒÑÑØÓÃ¾ÉÊı¾İ£¬ÏêÇé¼ûÉÏ·½Êä³ö
+goto end
+:ok
+echo [Íê³É] data.js ÒÑ¸üĞÂ
+:end
 echo.
 pause

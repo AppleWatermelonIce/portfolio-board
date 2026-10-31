@@ -65,7 +65,7 @@ async function pool(items, n, fn) {
 
 /* ------------------------------------------------------------ 通道解析 */
 function channelOf(p) {
-  if (p.src === 'goldcny') return { ch: 'skip' };   // 人民币金价由每日批处理（雅虎×ECB）刷新，浏览器端无雅虎 CORS
+  if (p.src === 'goldcny') return { ch: 'gold' };   // 人民币金价：浏览器端用 GoldAPI 现货 XAU/USD × er-api 美兑人 折算元/克，逐日追加（同源口径：COMEX×USD/CNY）。注：仅向前追加当日点，历史缺口仍需 update_data.py 补齐
   if (p.src === 'fund') return { ch: 'pz', id: String(p.secid || p.code).padStart(6, '0') };
   if (p.id === 'SPX')    return { ch: 'tx', id: 'us.INX', fq: '' };
   if (p.id === 'NDX100') return { ch: 'tx', id: 'us.NDX', fq: '' };
@@ -419,6 +419,24 @@ function applyPoints(p, pts, target = 'v') {
   return { added, changed };
 }
 
+/** 追加/更新单日点——用于浏览器端无法回看历史的现货源（黄金）。
+ *  与 applyPoints 不同：不要求与基座重叠，直接把当日实时折算价接到序列末尾，
+ *  保持与基座「COMEX×美兑人」同一口径、曲线连续。date 已存在则更新其值，否则新增。
+ *  仅维护 p.d / p.v（黄金等现货无前复权 q / 单位净值 u 轴）。 */
+function appendDailyPoint(p, date, value) {
+  if (!(value > 0) || !date) return null;
+  const v = +(+value).toFixed(4);
+  const m = new Map();
+  const len = Math.min(p.d.length, p.v.length);
+  for (let i = 0; i < len; i++) m.set(p.d[i], p.v[i]);
+  const existed = m.has(date);
+  m.set(date, v);
+  const ds = [...m.keys()].sort();
+  p.d = ds; p.v = ds.map(d => m.get(d));
+  p.last = ds[ds.length - 1];
+  return existed ? { added: 0, changed: 1 } : { added: 1, changed: 0 };
+}
+
 /** 仅追加新日期的收益率，不覆盖历史值。用于基金复权净值 p.v：
  *  天天基金 ACWorthTrend 与本地 p.v 的基准/复权口径存在长期漂移，
  *  直接按中位数比例缩放会让末点偏离；本函数以「最近重叠日」为锚，
@@ -559,12 +577,15 @@ async function refresh(force) {
   const plan = D.products.map(p => ({ p, c: channelOf(p) }));
   const txList = plan.filter(x => x.c.ch === 'tx');
   const fxList = plan.filter(x => x.c.ch === 'fr');
+  const goldList = plan.filter(x => x.c.ch === 'gold');   // 人民币金价：浏览器端逐日追加
   const pzList = plan.filter(x => x.c.ch === 'pz');
   const now = bjParts();
+  // null 通道：浏览器无法直连其数据源（Yahoo / 中债等无 CORS），只能靠 update_data.py 批处理刷新
+  const batchOnly = plan.filter(x => !x.c.ch);
   const errs = [];
   let done = 0, touched = 0;
   const total = plan.length;
-  // 浏览器端无法在线补全的标的（如人民币金价走雅虎，受 CORS 限制）直接跳过，不计入未完成
+  // 浏览器端无法在线补全的标的（Yahoo / 中债等无 CORS）直接跳过，不计入未完成
   const skipList = plan.filter(x => !x.c.ch || x.c.ch === 'skip');
   done = skipList.length;
   const tick = () => setStat(`⟳ 更新中 ${done}/${total}`, 'busy');
@@ -589,6 +610,24 @@ async function refresh(force) {
         if (res && (res.added || res.changed)) touched++;
         else if (!res) errs.push(p.name + '(无重叠)');
       } catch (e) { errs.push(p.name); }
+      done++; tick();
+    }
+
+    /* ①b 黄金：GoldAPI 现货 XAU/USD × er-api 美兑人 → 元/克，追加/更新当日点。
+       与角标同源；仅当基座末日早于今日（即当天尚无新点）才拉取，避免用盘中价覆盖批处理收盘。 */
+    for (const { p } of goldList) {
+      if ((p.last || '') < now.key) {
+        try {
+          const g = await fetchGoldUsd();
+          let rate = null;
+          try { rate = (await fetchFxRate()).cny; } catch (e) { rate = null; }
+          if (rate != null) {
+            const cnyPerGram = g.price * rate / TROY_OZ_G;
+            const res = appendDailyPoint(p, now.key, cnyPerGram);
+            if (res && (res.added || res.changed)) touched++;
+          }
+        } catch (e) { errs.push(p.name + '(实时源失败)'); }
+      }
       done++; tick();
     }
 
@@ -622,12 +661,20 @@ async function refresh(force) {
     const rec = saved ? loadRec() : null;
     paintHead(rec);
     const t = bjStamp();
+    // 浏览器无法自动更新的批处理型产品（Yahoo / 中债等）：若其基座已陈旧，明确提示需重跑脚本
+    const staleBatch = batchOnly
+      .filter(x => x.p.last && (Date.parse(now.key) - Date.parse(x.p.last)) / 864e5 >= 2)
+      .map(x => x.p.name);
+    let kind, msg;
     if (errs.length)
-      setStat(`⟳ 已更新 ${t} · ${touched} 个有变动 · ${errs.length} 项失败：${errs.join('；')}`, 'warn');
+      { kind = 'warn'; msg = `⟳ 已更新 ${t} · ${touched} 个有变动 · ${errs.length} 项失败：${errs.join('；')}`; }
     else if (touched)
-      setStat(`⟳ 已更新 ${t} · ${touched} 个标的有新数据`, 'ok');
+      { kind = 'ok'; msg = `⟳ 已更新 ${t} · ${touched} 个标的有新数据`; }
     else
-      setStat(`✓ ${t} 检查完毕，数据已是最新`, 'ok');
+      { kind = 'ok'; msg = `✓ ${t} 检查完毕，数据已是最新`; }
+    if (staleBatch.length)
+      { kind = 'warn'; msg += ` · ⚠ 浏览器无法自动更新（需重跑 update_data.py）：${staleBatch.join('、')}`; }
+    setStat(msg, kind);
     window.renderAll && window.renderAll();
     fetchRealtime();                       // 主曲线刷新后，同步拉一次实时角标
   } catch (e) {
