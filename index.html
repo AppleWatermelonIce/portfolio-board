@@ -1321,6 +1321,17 @@ function renderYieldStats(el, p){
   ).join('') + `<span class="stat" style="color:var(--muted2)">${m.from} → ${m.to} · 区间变动</span>`;
 }
 
+/* 场内基金 / LOF 的价-净溢价率：产物 premNow 是脚本抓取的最新快照，离线亦可见，
+   与右上角「盘中实时价 + 溢价率」角标互补。QDII-LOF 无 IOPV，基准是最新公布单位净值
+   （T-1 滞后），故括号里必须标出口径与日期，避免被当成实时 IOPV 溢价。 */
+function premNote(p){
+  if (p.premNow == null || !isFinite(p.premNow)) return '';
+  const basis = (p.premIOPV != null && p.premIOPV > 0) ? 'IOPV' : '最新公布净值';
+  const date  = p.premDate ? ' · ' + p.premDate : '';
+  return `<span class="stat">最新溢价率 <b>${fmtPct(p.premNow)}</b>
+    <span style="color:var(--muted2)">(${basis}${date})</span></span>`;
+}
+
 function renderStats(p){
   const el = document.getElementById('st-'+p.id);
   if (!el) return;
@@ -1337,7 +1348,7 @@ function renderStats(p){
     <span class="stat" id="lt-${p.id}">${latestHTML(p, m)}</span>
     <span class="stat" style="color:var(--muted2)">${m.from} → ${m.to}</span>
     ${m.trimmed ? `<span class="stat" style="color:#a3312a">⚠ ${state.priceKind==='real' ? '前复权在长周期会因累计分红而失真（早期已为负）' : '序列早期含非正值'}，
-       起点已顺延至 ${m.cutAt}；切到「复权」口径可看完整历史</span>` : ''}`;
+       起点已顺延至 ${m.cutAt}；切到「复权」口径可看完整历史</span>` : ''}${premNote(p)}`;
   // 配对子标的：在基准信息下新增整行（名称 + 与基准对齐的指标 + 实时角标）
   for (const a of pairedOf(p)){
     const ma = metrics(a); if (!ma) continue;
@@ -1464,14 +1475,14 @@ function renderCompare(){
 
 /* ---------------------------------------------------------- 槽位（二级分类）
    观察仓按「资产槽位」归类：日本 / 中国离岸港股 / 欧洲 / 台湾 / 韩国 / ASEAN /
-   中国创新药 / 电网电气化 / 全球医疗生科。中国国债收益率曲线（CNGB）为独立槽位，置于全站第一组，
+   中国创新药 / 电网电气化 / 全球医疗生科 / 美股科技。中国国债收益率曲线（CNGB）为独立槽位，置于全站第一组，
    作为债券板块的利率基准。债券基金按穿透后的债券类型分组：利率债 / 信用债 / 同业存单 / 可转债；
    组内再按久期从长到短排序（长久期 > 中长久期 > 短久期 > 固含股 > 无），
    久期同时以卡片角标（dur）展示。
    排序与标题都只依赖 products.json 的 slot 字段，新增槽位零代码（未列出的槽位按末尾处理）。 */
 const SLOT_ORDER = ['国债收益率曲线','日本','中国A股/均衡','中国A股/成长','中国A股/低碳','中国A股/科技',
                     '中国A股/机器人','中国A股/量化','中国A股Beta','中国A股Alpha','中国离岸/港股',
-                    '欧洲','台湾','韩国','ASEAN','澳大利亚','中国创新药','电网/电气化','全球医疗/生科',
+                    '欧洲','台湾','韩国','ASEAN','澳大利亚','中国创新药','电网/电气化','全球医疗/生科','美股/科技',
                     '利率债','信用债','同业存单','可转债'];
 /* 久期排序：同一槽位（尤其债券基金）内按久期从长到短排列。
    长久期 > 中长久期 > 短久期 > 固含股（混合策略）> 无久期（如收益率曲线 CNGB）。 */
