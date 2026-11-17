@@ -76,7 +76,28 @@ function channelOf(p) {
     const pre = { '0': 'sz', '1': 'sh', '116': 'hk' }[m[1]];
     if (pre) return { ch: 'tx', id: pre + (m[1] === '116' ? m[2].padStart(5, '0') : m[2]), fq: 'hfq' };
   }
+  // 雅虎港基 / 中债：浏览器无 CORS 直连源，但 GitHub Actions 每日已把权威历史写进仓库
+  // data/history/<id>.json，经 jsDelivr(ACAO=*) 读回即可在线补全，无需重跑本地脚本。
+  if (p.src === 'yahoo' || p.src === 'cnyield') return { ch: 'gh', id: p.id };
   return { ch: null };
+}
+
+/* ------------------------------------- ⑤ GitHub 历史（雅虎港基 / 中债） */
+const GH_BASE = 'https://cdn.jsdelivr.net/gh/AppleWatermelonIce/portfolio-board@master/data/history/';
+async function ghGet(p) {
+  // jsDelivr 会缓存 @master；加 cache-bust 参数确保拿到 Actions 最新提交
+  const u = GH_BASE + encodeURIComponent(p.id) + '.json?v=' + Date.now();
+  const r = await fetch(u, { cache: 'no-store' });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const j = await r.json();
+  if (!j || !j.d || !j.v) throw new Error('历史数据缺失');
+  const rows = [];
+  for (let i = 0; i < j.d.length; i++) {
+    const v = parseFloat(j.v[i]);
+    if (j.d[i] && isFinite(v)) rows.push([j.d[i], v]);
+  }
+  if (!rows.length) throw new Error('无有效历史点');
+  return rows;
 }
 
 /* -------------------------------------------------- ① 腾讯日K（fetch） */
@@ -579,13 +600,14 @@ async function refresh(force) {
   const fxList = plan.filter(x => x.c.ch === 'fr');
   const goldList = plan.filter(x => x.c.ch === 'gold');   // 人民币金价：浏览器端逐日追加
   const pzList = plan.filter(x => x.c.ch === 'pz');
+  const ghList = plan.filter(x => x.c.ch === 'gh');       // 雅虎港基 / 中债：读 Actions 维护的仓库历史
   const now = bjParts();
-  // null 通道：浏览器无法直连其数据源（Yahoo / 中债等无 CORS），只能靠 update_data.py 批处理刷新
+  // null 通道：浏览器无数据源、且仓库无对应历史，只能靠本地脚本补（正常应为空）
   const batchOnly = plan.filter(x => !x.c.ch);
   const errs = [];
   let done = 0, touched = 0;
   const total = plan.length;
-  // 浏览器端无法在线补全的标的（Yahoo / 中债等无 CORS）直接跳过，不计入未完成
+  // 无法在线补全的标的直接跳过，不计入未完成
   const skipList = plan.filter(x => !x.c.ch || x.c.ch === 'skip');
   done = skipList.length;
   const tick = () => setStat(`⟳ 更新中 ${done}/${total}`, 'busy');
@@ -630,6 +652,16 @@ async function refresh(force) {
       }
       done++; tick();
     }
+
+    /* ②b 雅虎港基 / 中债：读 GitHub Actions 每日维护的历史（jsDelivr, CORS=*）。
+       基座 data.js 由同一 Actions 生成，这里只补浏览器打开后可能新增的尾部点。 */
+    await pool(ghList, 3, async ({ p, c }) => {
+      const rows = await ghGet(p);
+      const r = applyPoints(p, rows);
+      done++; tick();
+      if (!r) errs.push(p.name + '(历史无重叠)');
+      else if (r.added || r.changed) touched++;
+    });
 
     /* ③ 基金：只有净值确实落后于期望披露日才拉（pingzhongdata 体积大） */
   const exp = expectedNavDate(calendar(), now);
